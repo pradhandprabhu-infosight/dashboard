@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Students by Difficulty</title>
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+    const supabaseUrl = 'https://qmmcifiwmnqnnjndyxdj.supabase.co';
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtbWNpZml3bW5xbm5qbmR5eGRqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg4NjE2ODYsImV4cCI6MjA2NDQzNzY4Nn0.awYNH_00ZBMZQWPIOasXxiTOZragLYUazwbSnOOC6xA';
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const $ = (sel) => document.querySelector(sel);
+
+    function getLevel() {
+      const q = new URLSearchParams(location.search).get('level');
+      return ['easy', 'medium', 'hard'].includes(q) ? q : 'medium';
+    }
+
+    async function loadStudents(level) {
+      $('#chosenLevel').textContent = level;
+      $('#status').textContent = 'Loading...';
+      $('#count').textContent = '—';
+      $('#tbody').innerHTML = '';
+
+      const { data: users, error } = await supabase
+        .from('USER')
+        .select('*')
+        .eq('challenge_mode', level);
+
+      if (error) {
+        console.error(error);
+        $('#status').textContent = 'Failed to load.';
+        return;
+      }
+
+      $('#count').textContent = users?.length ?? 0;
+      $('#status').textContent = users?.length ? '' : 'No students found.';
+
+      const rows = (users || []).map(u => `
+        <tr>
+          <td><a href="/student/${encodeURIComponent(u.user_name)}" style="color:#2563eb;text-decoration:underline;">${u.user_name}</a></td>
+          <td>${u.score ?? 0}</td>
+          <td>${u.domain ?? ''}</td>
+        </tr>
+      `);
+      $('#tbody').innerHTML = rows.join('');
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      const level = getLevel();
+      $('#difficultySelect').value = level;
+      loadStudents(level);
+
+      $('#difficultySelect').addEventListener('change', (e) => {
+        const level = e.target.value;
+        const params = new URLSearchParams(location.search);
+        params.set('level', level);
+        history.replaceState(null, '', `${location.pathname}?${params}`);
+        $('#chosenLevel').textContent = level;
+        loadStudents(level);
+      });
+    });
+  </script>
+  <style>
+    body { font-family: system-ui; background:#f5f5f5; padding:2rem; }
+    .card { background:#fff; padding:1.25rem; border-radius:10px; box-shadow:0 0 6px rgba(0,0,0,0.08); }
+    table { width:100%; border-collapse:collapse; margin-top:1rem; }
+    th, td { padding:10px 12px; border-bottom:1px solid #eee; }
+    th { background:#111827; color:#fff; text-align:left; }
+    .toolbar { margin-bottom:1rem; display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
+    .kpi { background:#111827; color:#fff; padding:.6rem .9rem; border-radius:8px; }
+    .backlink { color:#2563eb; margin-bottom:1rem; display:inline-block; }
+    select { padding:.4rem .6rem; border-radius:6px; border:1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <a class="backlink" href="/">← Back to Admin</a>
+
+  <div class="card">
+    <h1>Students by Difficulty: <span id="chosenLevel">—</span></h1>
+
+    <div class="toolbar">
+      <label for="difficultySelect"><strong>Difficulty:</strong></label>
+      <select id="difficultySelect">
+        <option value="medium">medium</option>
+        <option value="hard">hard</option>
+        <option value="easy">easy</option>
+      </select>
+      <span class="kpi">Students: <strong id="count">—</strong></span>
+    </div>
+
+    <p id="status"></p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Student</th>
+          <th>Score</th>
+          <th>Subject</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</body>
+</html>

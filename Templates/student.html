@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Student Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+    const supabase = createClient(
+      'https://qmmcifiwmnqnnjndyxdj.supabase.co',
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtbWNpZml3bW5xbm5qbmR5eGRqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg4NjE2ODYsImV4cCI6MjA2NDQzNzY4Nn0.awYNH_00ZBMZQWPIOasXxiTOZragLYUazwbSnOOC6xA'
+    );
+
+    // This would be dynamically replaced by a server-side templating engine
+    const USERNAME = "{{ username }}"; 
+    document.getElementById('username-header').textContent = `${USERNAME}'s Dashboard`;
+
+
+    // ---------- Charts ----------
+    async function renderStudentLineChart(days = 7) {
+      const now = new Date();
+      const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+      const startOfWindow = new Date(endOfToday);
+      startOfWindow.setDate(startOfWindow.getDate() - (days - 1));
+      const ymdLocal = (d) => d.toLocaleDateString('en-CA');
+
+      const { data: convos } = await supabase
+        .from('conversation')
+        .select('created_at')
+        .eq('user_name', USERNAME)
+        .gte('created_at', startOfWindow.toISOString())
+        .lte('created_at', endOfToday.toISOString());
+
+      const usageByDate = new Map();
+      for (let i = 0; i < days; i++) {
+        const d = new Date(startOfWindow);
+        d.setDate(startOfWindow.getDate() + i);
+        usageByDate.set(ymdLocal(d), 0);
+      }
+
+      for (const c of convos || []) {
+        const localDay = ymdLocal(new Date(c.created_at));
+        if (usageByDate.has(localDay)) {
+          usageByDate.set(localDay, usageByDate.get(localDay) + 1);
+        }
+      }
+
+      const labels = Array.from(usageByDate.keys());
+      const data = Array.from(usageByDate.values());
+      
+      // Get CSS variables for chart colors
+      const style = getComputedStyle(document.body);
+      const primaryColor = style.getPropertyValue('--primary-color');
+      const primaryColorTransparent = style.getPropertyValue('--primary-color-transparent');
+      const gridColor = style.getPropertyValue('--border-color');
+      const textColor = style.getPropertyValue('--text-color-secondary');
+
+      new Chart(document.getElementById('usageChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Questions Asked',
+            data,
+            borderColor: primaryColor,
+            backgroundColor: primaryColorTransparent,
+            fill: true,
+            tension: 0.4,
+            pointRadius: 4,
+            pointBackgroundColor: primaryColor,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { 
+            legend: { display: false },
+            tooltip: {
+                backgroundColor: '#fff',
+                titleColor: '#333',
+                bodyColor: '#666',
+                borderColor: gridColor,
+                borderWidth: 1,
+                padding: 10,
+                cornerRadius: 8,
+            }
+          },
+          scales: {
+            x: { 
+              title: { display: false },
+              grid: { display: false },
+              ticks: { color: textColor }
+            },
+            y: { 
+              title: { display: true, text: 'Questions Asked', color: textColor },
+              beginAtZero: true, 
+              grid: { color: gridColor },
+              ticks: { 
+                color: textColor,
+                precision: 0 
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // ---------- KPIs ----------
+    function renderCoverageList(raw) {
+      const ul = document.getElementById('coverage');
+      ul.innerHTML = ''; // Clear loading state
+
+      if (!raw || !raw.trim()) {
+        ul.innerHTML = '<li>No coverage data yet.</li>';
+        return;
+      }
+      
+      const tokens = raw.trim().split(/\s+/);
+      tokens.forEach(tok => {
+        const li = document.createElement('li');
+        li.textContent = tok;
+        ul.appendChild(li);
+      });
+    }
+    
+    function setProgress(valOutOf100) {
+      const val = Math.max(0, Math.min(valOutOf100 ?? 0, 100));
+      const pct = Math.round(val);
+      const bar = document.getElementById('scoreBar');
+      bar.style.width = pct + '%';
+      bar.textContent = pct + '%';
+    }
+
+    async function renderStudentKPIs() {
+      const { data: user } = await supabase
+        .from('USER')
+        .select('*')
+        .eq('user_name', USERNAME)
+        .single();
+
+      if (!user) {
+        // Handle case where user is not found
+        document.querySelectorAll('.kpi-value, #assessment').forEach(el => el.textContent = 'User not found');
+        return;
+      }
+
+      document.getElementById('topic').textContent = user.current_topic || 'N/A';
+      document.getElementById('difficulty').textContent = user.challenge_mode || 'N/A';
+      document.getElementById('assessment').textContent = user.knowledge_assessment || 'No assessment data.';
+      
+      setProgress(user.score);
+      renderCoverageList(user.coverage_status || '');
+    }
+
+    renderStudentKPIs();
+    renderStudentLineChart();
+  </script>
+  <style>
+    :root {
+      --primary-color: #2563eb;
+      --primary-color-transparent: rgba(37, 99, 235, 0.1);
+      --green-color: #22c55e;
+      --green-color-light: #f0fdf4;
+      --background-color: #f8fafc;
+      --card-bg-color: #ffffff;
+      --text-color-primary: #1e293b;
+      --text-color-secondary: #64748b;
+      --border-color: #e2e8f0;
+      --shadow: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -2px rgba(0,0,0,0.07);
+      --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.07), 0 4px 6px -4px rgba(0,0,0,0.07);
+    }
+
+    * { box-sizing: border-box; }
+    
+    body {
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background-color: var(--background-color);
+      padding: 2rem;
+      color: var(--text-color-primary);
+      margin: 0;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: auto;
+    }
+    
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+    }
+
+    h1 {
+      font-size: 1.875rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    .backlink { 
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--primary-color);
+      text-decoration: none;
+      font-weight: 500;
+      transition: opacity 0.2s;
+    }
+    .backlink:hover { opacity: 0.8; }
+
+    /* --- Layout Grid --- */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(1, 1fr);
+      gap: 1.5rem;
+    }
+
+    @media (min-width: 1024px) {
+      .dashboard-grid {
+        grid-template-columns: 2fr 1fr;
+      }
+    }
+
+    .main-content {
+        display: grid;
+        grid-template-columns: repeat(1, 1fr);
+        gap: 1.5rem;
+    }
+
+    .sidebar {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 1.5rem;
+        align-content: start;
+    }
+    
+    /* --- Card Styles --- */
+    .card {
+      background: var(--card-bg-color);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: var(--shadow);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .card-compact {
+      padding-top: 1rem;
+      padding-bottom: 1rem;
+    }
+
+    .card:hover {
+        transform: translateY(-4px);
+        box-shadow: var(--shadow-lg);
+    }
+    .card-header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+    }
+    .card-title {
+        color: var(--text-color-secondary);
+        font-size: 0.875rem;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .card-icon {
+        color: var(--text-color-secondary);
+    }
+    .kpi-value {
+        font-size: 1.5rem;
+        font-weight: 600;
+    }
+
+    /* --- Specific Card Layouts --- */
+    .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 1.5rem;
+    }
+    
+    .chart-card {
+        padding-bottom: 2rem; /* More space for chart */
+    }
+
+    #assessment {
+      line-height: 1.6;
+      color: var(--text-color-primary);
+    }
+
+    /* Progress bar */
+    .progress-wrapper { margin-top: 0.5rem; }
+    .progress-bar {
+      background-color: var(--border-color);
+      border-radius: 999px;
+      overflow: hidden;
+      height: 24px;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(45deg, var(--green-color), #34d399);
+      color: #fff;
+      text-align: center;
+      line-height: 24px;
+      font-size: 12px;
+      font-weight: 600;
+      transition: width 500ms ease-in-out;
+      border-radius: 999px;
+    }
+
+    /* Coverage List */
+    #coverage {
+      list-style-type: none;
+      padding-left: 0;
+      margin-top: 0.5rem;
+      color: var(--text-color-primary);
+    }
+    #coverage li { 
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      background-color: var(--green-color-light);
+      margin-bottom: 0.5rem;
+      font-weight: 500;
+      color: var(--green-color);
+      border: 1px solid var(--green-color);
+    }
+     #coverage li:last-child { margin-bottom: 0; }
+    
+    /* Chart container */
+    .chart-container {
+        position: relative;
+        height: 300px; /* Give canvas a defined height */
+    }
+
+  </style>
+</head>
+<body>
+  
+  <div class="container">
+    <div class="header">
+      <h1 id="username-header">Student Dashboard</h1>
+      <a class="backlink" href="/">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+          <path fill-rule="evenodd" d="M15 8a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 8.5H14.5A.5.5 0 0 0 15 8z"/>
+        </svg>
+        <span>Back to Admin</span>
+      </a>
+    </div>
+
+    <div class="dashboard-grid">
+      
+      <div class="main-content">
+      <div class="kpi-grid">
+          <div class="card card-compact">
+            <div class="card-header">
+              <svg class="card-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M6.354 5.5H4a3 3 0 0 0 0 6h3a3 3 0 0 0 2.83-4H9c-.086 0-.166.017-.248.05L6.354 5.5zM4 10a2 2 0 1 1 0-4h3.646l-2 2L4 10zm4.293-1.293a.5.5 0 0 1 .707 0L10.293 10l-1.293 1.293a.5.5 0 1 1-.707-.707l.586-.586H8.5a.5.5 0 0 1 0-1h1.293l-.586-.586a.5.5 0 0 1 0-.707zM11 4a3 3 0 1 0 0 6h-1a1 1 0 1 0 0 2h1a5 5 0 1 1 0-10h-1a1 1 0 1 1 0-2h1a3 3 0 0 0 0 6z"/></svg>
+              <h2 class="card-title">Current Topic</h2>
+            </div>
+            <div id="topic" class="kpi-value">Loading...</div>
+          </div>
+          <div class="card card-compact">
+            <div class="card-header">
+               <svg class="card-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8 0a.5.5 0 0 1 .5.5V3h-1V.5A.5.5 0 0 1 8 0zM6 4.5a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 0 1h-3a.5.5 0 0 1-.5-.5zM.5 8a.5.5 0 0 1-.5-.5V6a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 0 1h-3v1.5a.5.5 0 0 1-.5.5zm15 0a.5.5 0 0 0 .5-.5V6a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 0 0 1h3v1.5a.5.5 0 0 0 .5.5zM10 11.5a.5.5 0 0 0-.5.5V15h-3v-3.5a.5.5 0 0 0-1 0V15a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5zM8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 13A6 6 0 1 1 8 2a6 6 0 0 1 0 12z"/></svg>
+              <h2 class="card-title">Current Difficulty</h2>
+            </div>
+            <div id="difficulty" class="kpi-value">Loading...</div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <div class="card-header">
+            <svg class="card-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M2.146 8.354a.5.5 0 1 1 .708-.708L6.5 11.293l6.646-6.647a.5.5 0 0 1 .708.708l-7 7a.5.5 0 0 1-.708 0l-3-3z"/><path d="M.5 10.5a.5.5 0 0 1 .5-.5h14a.5.5 0 0 1 0 1H1a.5.5 0 0 1-.5-.5z"/></svg>
+            <h2 class="card-title">Topic Progress</h2>
+          </div>
+          <div class="progress-wrapper">
+            <div class="progress-bar">
+              <div id="scoreBar" class="progress-fill">0%</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card chart-card">
+          <div class="card-header">
+            <svg class="card-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M2 13.5a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11a.5.5 0 0 1-.5-.5zm4-3a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5zm-4-3a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11a.5.5 0 0 1-.5-.5zm0-3a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5z"/></svg>
+            <h2 class="card-title">Usage (Last 7 Days)</h2>
+          </div>
+          <div class="chart-container">
+            <canvas id="usageChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar">
+        <div class="card">
+          <div class="card-header">
+            <svg class="card-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8.211 2.047a.5.5 0 0 0-.422 0l-7.5 3.5a.5.5 0 0 0 .025.917l7.5 3a.5.5 0 0 0 .372 0l7.5-3a.5.5 0 0 0 .025-.917l-7.5-3.5zM8 5.093 1.572 2.5l6.428-2.924L14.428 2.5 8 5.093z"/><path d="M4.225 7.455.261 9.11a.5.5 0 0 0-.002.865l7.5 4a.5.5 0 0 0 .444 0l7.5-4a.5.5 0 0 0-.002-.865L11.775 7.455a.5.5 0 0 0-.372 0l-3.5 1.833a.5.5 0 0 1-.444 0l-3.5-1.833a.5.5 0 0 0-.372 0z"/></svg>
+            <h2 class="card-title">Knowledge Assessment</h2>
+          </div>
+          <div id="assessment">Loading...</div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <svg class="card-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z"/></svg>
+            <h2 class="card-title">Coverage Status</h2>
+          </div>
+          <ul id="coverage"><li>Loading...</li></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

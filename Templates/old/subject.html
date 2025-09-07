@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Subject — Students</title>
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+    // --- Supabase (same as admin.html) ---
+    const supabaseUrl = 'https://qmmcifiwmnqnnjndyxdj.supabase.co';
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtbWNpZml3bW5xbm5qbmR5eGRqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg4NjE2ODYsImV4cCI6MjA2NDQzNzY4Nn0.awYNH_00ZBMZQWPIOasXxiTOZragLYUazwbSnOOC6xA';
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const $ = (s) => document.querySelector(s);
+
+    function getLangFromQuery() {
+      const p = new URLSearchParams(location.search);
+      const v = (p.get('lang') || '').trim();
+      return v || 'all';
+    }
+
+    async function loadStudents(lang) {
+      $('#status').textContent = 'Loading...';
+      $('#count').textContent = '—';
+      $('#tbody').innerHTML = '';
+
+      let users, error;
+      if (lang === 'all') {
+        ({ data: users, error } = await supabase.from('USER').select('*'));
+      } else {
+        ({ data: users, error } = await supabase.from('USER').select('*').eq('domain', lang));
+      }
+      if (error) {
+        console.error(error);
+        $('#status').textContent = 'Failed to load students.';
+        return;
+      }
+
+      // Sort by name for readability
+      (users || []).sort((a,b) => (a.user_name||'').localeCompare(b.user_name||''));
+
+      $('#count').textContent = users?.length ?? 0;
+      $('#status').textContent = users?.length ? '' : 'No students for this subject.';
+
+      const rows = (users || []).map(u => `
+        <tr>
+          <td><a href="/student/${encodeURIComponent(u.user_name)}" style="color:#2563eb;text-decoration:underline;">${u.user_name}</a></td>
+          <td>${u.score ?? 0}</td>
+          <td>${u.challenge_mode ?? ''}</td>
+          <td>${u.domain ?? ''}</td>
+        </tr>
+      `);
+      $('#tbody').innerHTML = rows.join('');
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      const lang = getLangFromQuery();
+      $('#headingLang').textContent = lang === 'all' ? 'All Subjects' : lang;
+      $('#langSelect').value = lang;
+      loadStudents(lang);
+
+      // Allow switching from the page itself
+      $('#langSelect').addEventListener('change', (e) => {
+        const v = e.target.value;
+        const params = new URLSearchParams(location.search);
+        params.set('lang', v);
+        history.replaceState(null, '', `${location.pathname}?${params.toString()}`);
+        $('#headingLang').textContent = v === 'all' ? 'All Subjects' : v;
+        loadStudents(v);
+      });
+    });
+  </script>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#f5f5f5; padding:2rem; }
+    .card { background:#fff; border-radius:10px; box-shadow:0 0 6px rgba(0,0,0,.08); padding:1.25rem; }
+    .toolbar { display:flex; gap:1rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem; }
+    .kpi { background:#111827; color:#fff; padding:.6rem .9rem; border-radius:8px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:10px 12px; border-bottom:1px solid #eee; }
+    th { background:#111827; color:#fff; text-align:left; }
+    #status { color:#6b7280; margin:.5rem 0 0; }
+    .backlink { display:inline-block; margin-bottom:1rem; color:#2563eb; }
+    select { padding:.4rem .6rem; border-radius:6px; border:1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <a class="backlink" href="/">← Back to Admin</a>
+
+  <div class="card">
+    <h1>Subject: <span id="headingLang">—</span></h1>
+    <div class="toolbar">
+      <label for="langSelect"><strong>Subject:</strong></label>
+      <!-- You can add/remove options; 'all' shows everything -->
+      <select id="langSelect">
+        <option value="all">All</option>
+        <option value="python">python</option>
+        <option value="javascript">javascript</option>
+      </select>
+      <span class="kpi">Students: <strong id="count">—</strong></span>
+    </div>
+
+    <p id="status"></p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Student</th>
+          <th>Score</th>
+          <th>Hardness</th>
+          <th>Subject</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</body>
+</html>

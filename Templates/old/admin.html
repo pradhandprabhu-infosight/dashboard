@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+    const supabaseUrl = 'https://qmmcifiwmnqnnjndyxdj.supabase.co';
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtbWNpZml3bW5xbm5qbmR5eGRqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg4NjE2ODYsImV4cCI6MjA2NDQzNzY4Nn0.awYNH_00ZBMZQWPIOasXxiTOZragLYUazwbSnOOC6xA';
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const totalUsersEl = document.getElementById('total-users');
+    const newSignupsEl = document.getElementById('new-signups');
+    const avgSessionEl = document.getElementById('avg-session');
+    const avgDailyUsersEl = document.getElementById('avg-daily-users');
+    const avgQuestionsEl = document.getElementById('avg-questions');
+    const blockedUsersEl = document.getElementById('blocked-users');
+
+    async function loadKPIs() {
+      const { data: users } = await supabase.from('USER').select('*');
+      const { data: convos } = await supabase.from('conversation').select('*');
+
+      totalUsersEl.textContent = users.length;
+
+      const today = new Date().toISOString().split('T')[0];
+      const signupsToday = users.filter(u => u.created_at.startsWith(today));
+      newSignupsEl.textContent = signupsToday.length;
+
+      const sessions = users.map(u => convos.filter(c => c.user_name === u.user_name).length);
+      avgSessionEl.textContent = (sessions.reduce((a, b) => a + b, 0) / users.length).toFixed(1);
+
+      const usageByDate = {};
+      convos.forEach(c => {
+        const day = c.created_at.split('T')[0];
+        if (!usageByDate[day]) usageByDate[day] = new Set();
+        usageByDate[day].add(c.user_name);
+      });
+      const avgDaily = Object.values(usageByDate).map(set => set.size);
+      avgDailyUsersEl.textContent = (avgDaily.reduce((a, b) => a + b, 0) / avgDaily.length).toFixed(1);
+
+      avgQuestionsEl.textContent = (convos.length / users.length).toFixed(1);
+
+      const blocked = users.filter(u => u.domain === 'blocked');
+      blockedUsersEl.textContent = blocked.length;
+    }
+
+let lineChartInstance;
+
+async function renderScoreByMode() {
+  const { data: users } = await supabase.from('USER').select('*');
+  const buckets = {};
+
+  users.forEach(u => {
+    if (!buckets[u.challenge_mode]) buckets[u.challenge_mode] = [];
+    buckets[u.challenge_mode].push(u.score || 0);
+  });
+
+  const labels = Object.keys(buckets);
+  const data = labels.map(k => {
+    const scores = buckets[k];
+    return scores.reduce((a, b) => a + b, 0) / scores.length;
+  });
+
+  if (window.scoreModeChartInstance) window.scoreModeChartInstance.destroy();
+
+  window.scoreModeChartInstance = new Chart(document.getElementById('scoreByMode'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{ label: 'Avg Score', data, backgroundColor: 'teal' }]
+    },
+    options: {
+      plugins: {
+        legend: { display: false }
+      },
+      scales: {
+        x: { title: { display: true, text: 'Hardness Level' } },
+        y: { title: { display: true, text: 'Avg Score' } }
+      }
+    }
+  });
+
+  // Add click handler for score by mode bar chart
+  const scoreModeCanvas = document.getElementById('scoreByMode');
+  scoreModeCanvas.onclick = (evt) => {
+    const points = window.scoreModeChartInstance.getElementsAtEventForMode(
+      evt, 'nearest', { intersect: true }, true
+    );
+    if (!points.length) return;
+    const idx = points[0].index;
+    const difficulty = window.scoreModeChartInstance.data.labels[idx]; // e.g. "medium", "hard", "easy"
+    if (difficulty) {
+      window.location.href = `/difficulty?level=${encodeURIComponent(difficulty)}`;
+    }
+  };
+}
+
+async function renderLineChart(days = 7) {
+  // 1) Compute window [startOfWindow, endOfToday] in ISO for the query
+  const now = new Date();
+  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  const startOfWindow = new Date(endOfToday);
+  startOfWindow.setDate(startOfWindow.getDate() - (days - 1));
+
+  // helper: local YYYY-MM-DD (avoids UTC drifting)
+  const ymdLocal = (d) => d.toLocaleDateString('en-CA'); // e.g. "2025-09-06"
+
+  // 2) Pull only what we need, only for the window
+  const { data: convos, error } = await supabase
+    .from('conversation')
+    .select('created_at,user_name')
+    .gte('created_at', startOfWindow.toISOString())
+    .lte('created_at', endOfToday.toISOString());
+
+  if (error) {
+    console.error(error);
+    return;
+  }
+
+  // 3) Pre-fill the map with every day in the window (local time)
+  const usageByDate = new Map();
+  for (let i = 0; i < days; i++) {
+    const d = new Date(startOfWindow);
+    d.setDate(startOfWindow.getDate() + i);
+    usageByDate.set(ymdLocal(d), new Set());
+  }
+
+  // 4) Drop each row into the correct local-day bucket
+  for (const c of convos || []) {
+    if (!c.created_at || !c.user_name) continue;
+    const localDay = ymdLocal(new Date(c.created_at)); // timestamptz -> local day
+    if (usageByDate.has(localDay)) {
+      usageByDate.get(localDay).add(c.user_name);
+    }
+  }
+
+  // 5) Prepare chart data (labels already in chronological order)
+  const labels = Array.from(usageByDate.keys());
+  const data = labels.map((d) => usageByDate.get(d).size);
+
+  if (window.lineChartInstance) window.lineChartInstance.destroy();
+
+  // Create chart
+  window.lineChartInstance = new Chart(document.getElementById('usersTrend'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Daily Active Users',
+          data,
+          borderColor: 'blue',
+          backgroundColor: 'lightblue',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 3
+        }
+      ]
+    },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { title: { display: true, text: 'Date' } },
+        y: { title: { display: true, text: 'Active Users' }, beginAtZero: true, precision: 0 }
+      }
+    }
+  });
+
+  // 6) Make points clickable -> go to active.html with that date
+  const canvas = document.getElementById('usersTrend');
+  canvas.onclick = (evt) => {
+    const points = window.lineChartInstance.getElementsAtEventForMode(
+      evt, 'nearest', { intersect: true }, true
+    );
+    if (!points.length) return;
+    const idx = points[0].index;
+    const labelDate = window.lineChartInstance.data.labels[idx]; // "YYYY-MM-DD"
+    if (labelDate) {
+      window.location.href = `/active?date=${encodeURIComponent(labelDate)}`;
+    }
+  };
+}
+
+
+document.querySelectorAll('input[name="dateRange"]').forEach(radio => {
+  radio.addEventListener('change', e => {
+    renderLineChart(parseInt(e.target.value));
+  });
+});
+
+let barChartInstance;
+
+async function renderBarChart(lang = 'python') {
+  let users;
+  if (lang === 'all') {
+    ({ data: users } = await supabase.from('USER').select('*'));
+  } else {
+    ({ data: users } = await supabase.from('USER').select('*').eq('domain', lang));
+  }
+
+  const topicScores = {};
+  users.forEach(u => {
+    if (!topicScores[u.current_topic]) topicScores[u.current_topic] = [];
+    topicScores[u.current_topic].push(u.score || 0);
+  });
+
+  const labels = Object.keys(topicScores);
+  const data = labels.map(k => topicScores[k].reduce((a, b) => a + b, 0) / topicScores[k].length);
+
+  if (barChartInstance) barChartInstance.destroy();
+
+  const ctx = document.getElementById('scoreTopics');
+
+  barChartInstance = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{ label: 'Avg Score', data, backgroundColor: 'orange' }]
+    },
+    options: {
+      plugins: {
+        legend: { display: false }
+      },
+      scales: {
+        x: { title: { display: true, text: 'Topics' } },
+        y: { title: { display: true, text: 'Average Score' }, beginAtZero: true }
+      }
+    }
+  });
+
+  // ⬇️ Make bars clickable → /topic?name=...
+  ctx.onclick = (evt) => {
+    const points = barChartInstance.getElementsAtEventForMode(evt, 'nearest', { intersect: true }, true);
+    if (!points.length) return;
+    const idx = points[0].index;
+    const topic = labels[idx];
+    if (topic) {
+      window.location.href = `/topic?name=${encodeURIComponent(topic)}`;
+    }
+  };
+}
+
+// Add toggle listener
+document.querySelectorAll('input[name="langFilter"]').forEach(radio => {
+  radio.addEventListener('change', e => {
+    renderBarChart(e.target.value);
+  });
+});
+
+async function renderPieChart() {
+  const { data: users } = await supabase.from('USER').select('*');
+  const buckets = {};
+  users.forEach(u => {
+    buckets[u.challenge_mode] = (buckets[u.challenge_mode] || 0) + 1;
+  });
+  const labels = Object.keys(buckets);
+  const data = Object.values(buckets);
+  
+  if (window.pieChartInstance) window.pieChartInstance.destroy();
+  
+  window.pieChartInstance = new Chart(document.getElementById('hardnessPie'), {
+    type: 'pie',
+    data: { labels, datasets: [{ data, backgroundColor: ['red', 'blue', 'green'] }] },
+  });
+
+  // Add click handler for pie chart (THIS IS WHERE IT BELONGS)
+  const pieCanvas = document.getElementById('hardnessPie');
+  pieCanvas.onclick = (evt) => {
+    const points = window.pieChartInstance.getElementsAtEventForMode(
+      evt, 'nearest', { intersect: true }, true
+    );
+    if (!points.length) return;
+    const idx = points[0].index;
+    const difficulty = window.pieChartInstance.data.labels[idx]; // e.g. "medium", "hard", "easy"
+    if (difficulty) {
+      window.location.href = `/difficulty?level=${encodeURIComponent(difficulty)}`;
+    }
+  };
+}
+    
+async function renderLanguageBar() {
+  const { data: users } = await supabase.from('USER').select('*');
+  const langMap = {};
+  users.forEach(u => {
+    langMap[u.domain] = (langMap[u.domain] || 0) + 1;
+  });
+  const labels = Object.keys(langMap);
+  const data = Object.values(langMap);
+
+  if (window.langChartInstance) window.langChartInstance.destroy();
+
+  window.langChartInstance = new Chart(document.getElementById('langChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{ label: 'Students', data, backgroundColor: 'purple' }]
+    },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { title: { display: true, text: 'Language' } },
+        y: { title: { display: true, text: 'Number of Students' } }
+      }
+    }
+  });
+
+  // ⬇️ Add click handler for bar chart
+  const canvas = document.getElementById('langChart');
+  canvas.onclick = (evt) => {
+    const points = window.langChartInstance.getElementsAtEventForMode(
+      evt, 'nearest', { intersect: true }, true
+    );
+    if (!points.length) return;
+    const idx = points[0].index;
+    const lang = window.langChartInstance.data.labels[idx]; // e.g. "python"
+    if (lang) {
+      window.location.href = `/subject?lang=${encodeURIComponent(lang)}`;
+    }
+  };
+}
+
+    async function renderTable() {
+    const { data: users } = await supabase.from('USER').select('*');
+    const table = document.getElementById('studentsTable');
+
+    users.forEach(u => {
+      const row = document.createElement('tr');
+
+      // Build the student dashboard URL
+      const target = `/student/${encodeURIComponent(u.user_name)}`;
+
+      row.innerHTML = `
+        <td>${u.id}</td>
+        <td>
+          <a href="${target}" style="color: blue; text-decoration: underline; cursor: pointer;">
+            ${u.user_name}
+          </a>
+        </td>
+        <td>${u.score || 0}</td>
+        <td>${u.challenge_mode}</td>
+        <td>${u.domain}</td>
+      `;
+      table.appendChild(row);
+    });
+  }
+
+    loadKPIs();
+    renderLineChart();
+    renderBarChart();
+    renderPieChart();
+    renderLanguageBar();
+    renderTable();
+    renderScoreByMode();
+  </script>
+  <style>
+    body { font-family: sans-serif; padding: 2rem; background: #f5f5f5; }
+    h1 { text-align: center; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 1rem; margin-bottom: 2rem; }
+    .kpi { background: white; padding: 1rem; border-radius: 8px; text-align: center; box-shadow: 0 0 5px rgba(0,0,0,0.1); }
+    .charts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2rem; margin-top: 2rem; }
+.chart-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2rem;
+  margin-top: 2rem;
+} 
+
+.chart-container {
+  flex: 1 1 0;
+  min-width: 300px;
+  max-width: 33%;
+  height: 100%;
+  background: white;
+  padding: 1rem;
+  border-radius: 8px;
+  box-shadow: 0 0 5px rgba(0,0,0,0.1);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.chart-row.two-chart .chart-container {
+  max-width: 48%;
+}
+    table { width: 100%; border-collapse: collapse; margin-top: 2rem; }
+    th, td { padding: 8px 12px; border: 1px solid #ddd; }
+    th { background: #333; color: white; }
+    #hardnessPie {
+  max-height: 250px;
+}
+
+    
+  </style>
+</head>
+<body>
+  <h1>Admin Dashboard</h1>
+
+  <div class="kpi-grid">
+    <div class="kpi"><h3>Total Users</h3><p id="total-users">...</p></div>
+    <div class="kpi"><h3>New Signups Today</h3><p id="new-signups">...</p></div>
+    <div class="kpi"><h3>Avg. Session Duration</h3><p id="avg-session">...</p></div>
+    <div class="kpi"><h3>Avg. Daily Users</h3><p id="avg-daily-users">...</p></div>
+    <div class="kpi"><h3>Avg. Questions per User</h3><p id="avg-questions">...</p></div>
+    <div class="kpi"><h3>Blocked Users</h3><p id="blocked-users">...</p></div>
+  </div>
+
+<div class="chart-row two-chart">
+  <div class="chart-container">
+    <h3 style="text-align:center;">Daily Active Users</h3>
+    <div class="filter">
+      <label><input type="radio" name="dateRange" value="7" checked> Last 7 days</label>
+      <label><input type="radio" name="dateRange" value="30"> Last 30 days</label>
+    </div>
+    <br>
+    <canvas id="usersTrend"></canvas>
+  </div>
+
+  <div class="chart-container">
+    <h3 style="text-align:center;">Avg Questions per Topic</h3>
+    <div class="filter">
+      <label><input type="radio" name="langFilter" value="all" checked> All</label>
+      <label><input type="radio" name="langFilter" value="python"> Python</label>
+      <label><input type="radio" name="langFilter" value="javascript"> JavaScript</label>
+    </div>
+    <br>
+    <canvas id="scoreTopics"></canvas>
+  </div>
+</div>
+
+<div class="chart-row">
+  <div class="chart-container">
+    <h3 style="text-align:center;">% Students vs Hardness</h3>
+    <canvas id="hardnessPie"></canvas>
+  </div>
+
+  <div class="chart-container" style="height: 310px;">
+    <h3 style="text-align:center;">Students per Language</h3>
+    <canvas id="langChart"></canvas>
+  </div>
+
+  <div class="chart-container" style="height: 310px;">
+    <h3 style="text-align:center;">Avg Score per Hardness</h3>
+    <canvas id="scoreByMode"></canvas>
+  </div>
+</div>
+
+
+  <h2>Student Overview</h2>
+  <table>
+    <thead>
+      <tr><th>ID</th><th>Name</th><th>Score</th><th>Hardness</th><th>Language</th></tr>
+    </thead>
+    <tbody id="studentsTable"></tbody>
+  </table>
+</body>
+</html>

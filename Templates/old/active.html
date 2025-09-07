@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Active Users — Selected Date</title>
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+    // --- Supabase client (same as admin) ---
+    const supabaseUrl = 'https://qmmcifiwmnqnnjndyxdj.supabase.co';
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtbWNpZml3bW5xbm5qbmR5eGRqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg4NjE2ODYsImV4cCI6MjA2NDQzNzY4Nn0.awYNH_00ZBMZQWPIOasXxiTOZragLYUazwbSnOOC6xA';
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // --- Helpers ---
+    const $ = (sel) => document.querySelector(sel);
+    const ymdLocal = (d) => d.toLocaleDateString('en-CA'); // YYYY-MM-DD
+
+    function getDateFromQuery() {
+      const p = new URLSearchParams(location.search);
+      const q = p.get('date');
+      // Validate YYYY-MM-DD, else today.
+      if (q && /^\d{4}-\d{2}-\d{2}$/.test(q)) return q;
+      return ymdLocal(new Date());
+    }
+
+    function mkDayBoundsISO(dateStr) {
+      // Build local midnight → +1 day, then convert to ISO
+      const start = new Date(`${dateStr}T00:00:00`);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 1);
+      return { startISO: start.toISOString(), endISO: end.toISOString() };
+    }
+
+    async function loadActiveList(dateStr) {
+      $('#status').textContent = 'Loading...';
+      $('#activeCount').textContent = '—';
+      $('#usersTbody').innerHTML = '';
+
+      const { startISO, endISO } = mkDayBoundsISO(dateStr);
+
+      // Pull only needed fields within the date window
+      const { data: convos, error } = await supabase
+        .from('conversation')
+        .select('created_at,user_name')
+        .gte('created_at', startISO)
+        .lt('created_at', endISO);
+
+      if (error) {
+        console.error(error);
+        $('#status').textContent = 'Failed to load data.';
+        return;
+      }
+
+      // Unique users + counts for the selected date
+      const counts = new Map();
+      for (const c of convos || []) {
+        if (!c?.user_name) continue;
+        counts.set(c.user_name, (counts.get(c.user_name) || 0) + 1);
+      }
+
+      // Update header
+      $('#activeCount').textContent = counts.size.toString();
+      $('#status').textContent = counts.size ? '' : 'No active users for this date.';
+
+      // Render rows
+      const rows = [];
+      for (const [user, hits] of counts.entries()) {
+        const target = `/student/${encodeURIComponent(user)}`;
+        rows.push(`
+          <tr>
+            <td><a href="${target}" style="color: #2563eb; text-decoration: underline;">${user}</a></td>
+            <td style="text-align:center;">${hits}</td>
+          </tr>
+        `);
+      }
+      $('#usersTbody').innerHTML = rows.join('');
+    }
+
+    // --- Init ---
+    const selected = getDateFromQuery();
+    window.addEventListener('DOMContentLoaded', () => {
+      const input = $('#datePicker');
+      input.value = selected;
+      $('#chosenDate').textContent = selected;
+      loadActiveList(selected);
+
+      input.addEventListener('change', (e) => {
+        const d = e.target.value;
+        // Update URL (so sharing/back works) and reload list
+        const params = new URLSearchParams(location.search);
+        params.set('date', d);
+        history.replaceState(null, '', `${location.pathname}?${params.toString()}`);
+        $('#chosenDate').textContent = d;
+        loadActiveList(d);
+      });
+    });
+  </script>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background: #f5f5f5; padding: 2rem; }
+    .card { background: #fff; border-radius: 10px; box-shadow: 0 0 6px rgba(0,0,0,0.08); padding: 1.25rem; }
+    h1 { margin: 0 0 1rem; }
+    .toolbar { display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+    .kpi { background: #111827; color: #fff; padding: .75rem 1rem; border-radius: 8px; display: inline-block; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; background: #fff; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid #eee; }
+    th { background: #111827; color: #fff; text-align: left; }
+    #status { margin-top: .5rem; color: #6b7280; }
+    .backlink { display:inline-block; margin-bottom: 1rem; color:#2563eb; }
+  </style>
+</head>
+<body>
+  <a class="backlink" href="/">← Back to Admin</a>
+
+  <div class="card">
+    <h1>Active Users</h1>
+    <div class="toolbar">
+      <label for="datePicker"><strong>Date:</strong></label>
+      <input id="datePicker" type="date"/>
+      <span>Showing activity for <strong id="chosenDate">—</strong></span>
+      <span class="kpi">Active Students: <strong id="activeCount">—</strong></span>
+    </div>
+    <p id="status"></p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Student</th>
+          <th style="width:140px; text-align:center;">Conversations that day</th>
+        </tr>
+      </thead>
+      <tbody id="usersTbody"></tbody>
+    </table>
+  </div>
+</body>
+</html>

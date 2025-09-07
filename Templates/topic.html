@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Topic Details</title>
+    <script type="module">
+        import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+        const supabaseUrl = 'https://qmmcifiwmnqnnjndyxdj.supabase.co';
+        const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtbWNpZml3bW5xbm5qbmR5eGRqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg4NjE2ODYsImV4cCI6MjA2NDQzNzY4Nn0.awYNH_00ZBMZQWPIOasXxiTOZragLYUazwbSnOOC6xA';
+        const supabase = createClient(supabaseUrl, supabaseKey);
+
+        let allUsersData = [];
+        let sortColumn = 'user_name';
+        let sortDirection = 'asc';
+
+        function updateSortArrows() {
+            document.querySelectorAll('.sort-arrow').forEach(arrow => arrow.textContent = '');
+            const activeHeader = document.querySelector(`th[data-sort-key="${sortColumn}"]`);
+            if (activeHeader) {
+                activeHeader.querySelector('.sort-arrow').textContent = sortDirection === 'asc' ? '▼' : '▲';
+            }
+        }
+
+        function populateTable(users) {
+            const tableBody = document.getElementById('studentsTableBody');
+            tableBody.innerHTML = '';
+            users.forEach(u => {
+                const row = document.createElement('tr');
+                const target = `/student/${encodeURIComponent(u.user_name)}`;
+                const score = u.score || 0;
+                row.innerHTML = `
+                    <td><a href="${target}">${u.user_name}</a></td>
+                    <td>
+                        <div class="progress-container">
+                          <span class="progress-text">${score}%</span>
+                          <div class="progress-bar">
+                            <div class="progress-bar-fill" style="width: ${score}%;"></div>
+                          </div>
+                        </div>
+                    </td>
+                    <td><span class="tag tag-${u.challenge_mode}">${u.challenge_mode}</span></td>
+                    <td>${u.domain}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+
+        function renderTable() {
+            const difficultyOrder = { 'easy': 1, 'medium': 2, 'hard': 3 };
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+
+            let displayData = allUsersData.filter(user =>
+                user.user_name.toLowerCase().includes(searchTerm)
+            );
+            
+            document.getElementById('studentCount').textContent = `${displayData.length} Students`;
+
+            displayData.sort((a, b) => {
+                let comparison = 0;
+                if (sortColumn === 'challenge_mode') {
+                    const valA = difficultyOrder[a.challenge_mode] || 0;
+                    const valB = difficultyOrder[b.challenge_mode] || 0;
+                    comparison = valA - valB;
+                } else {
+                    const valA = a[sortColumn];
+                    const valB = b[sortColumn];
+                    if (typeof valA === 'number') {
+                        comparison = (valA || 0) - (valB || 0);
+                    } else {
+                        comparison = (valA || '').localeCompare(valB || '');
+                    }
+                }
+                return sortDirection === 'asc' ? comparison : -comparison;
+            });
+
+            populateTable(displayData);
+            updateSortArrows();
+        }
+
+        async function populateTopicSelector(currentTopic) {
+            const selector = document.getElementById('topicSelector');
+            selector.innerHTML = '';
+            
+            const { data, error } = await supabase.from('USER').select('current_topic');
+            if (error) {
+                console.error("Error fetching topics:", error);
+                return;
+            }
+
+            const allTopics = [...new Set(data.map(u => u.current_topic).filter(Boolean))].sort();
+
+            allTopics.forEach(topic => {
+                const option = document.createElement('option');
+                option.value = topic;
+                option.textContent = topic;
+                if (topic === currentTopic) {
+                    option.selected = true;
+                }
+                selector.appendChild(option);
+            });
+
+            selector.addEventListener('change', (event) => {
+                const newTopic = event.target.value;
+                window.location.href = `/topic?name=${encodeURIComponent(newTopic)}`;
+            });
+        }
+        
+        async function fetchAndRenderPage() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const topicName = urlParams.get('name');
+
+            if (!topicName) {
+                document.title = "No Topic Specified";
+                document.getElementById('topicSelector').innerHTML = '<option>N/A</option>';
+                return;
+            }
+            
+            document.title = `Topic: ${topicName}`;
+            populateTopicSelector(topicName);
+
+            const { data, error } = await supabase
+                .from('USER')
+                .select('*')
+                .eq('current_topic', topicName);
+            
+            if (error) {
+                console.error("Error fetching students for topic:", error);
+                return;
+            }
+
+            allUsersData = data;
+            renderTable();
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchAndRenderPage();
+            document.getElementById('searchInput').addEventListener('input', renderTable);
+            document.querySelectorAll('th.sortable').forEach(header => {
+                header.addEventListener('click', () => {
+                    const newSortColumn = header.dataset.sortKey;
+                    if (sortColumn === newSortColumn) {
+                        sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        sortColumn = newSortColumn;
+                        sortDirection = 'asc';
+                    }
+                    renderTable();
+                });
+            });
+        });
+    </script>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --primary-color-transparent: rgba(37, 99, 235, 0.1);
+            --purple-color: #8b5cf6;
+            --purple-color-transparent: rgba(139, 92, 246, 0.1);
+            --background-color: #f8fafc;
+            --card-bg-color: #ffffff;
+            --text-color-primary: #1e293b;
+            --text-color-secondary: #64748b;
+            --border-color: #e2e8f0;
+            --shadow: 0 1px 2px 0 rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1);
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: var(--background-color);
+            color: var(--text-color-primary);
+            margin: 0;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .back-link {
+            display: inline-block;
+            background-color: var(--primary-color-transparent);
+            color: var(--primary-color);
+            border: 1px solid transparent;
+            padding: 0.6rem 1rem;
+            border-radius: 8px;
+            font-weight: 600;
+            text-decoration: none;
+            font-size: 0.9rem;
+            margin-bottom: 1.5rem;
+            transition: background-color 0.2s;
+        }
+        .back-link:hover {
+            background-color: rgba(37, 99, 235, 0.2);
+        }
+        .card {
+            background: var(--card-bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: var(--shadow-md);
+        }
+        .table-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .topic-details {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        .topic-selector-wrapper {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .topic-prefix {
+            font-weight: 600;
+            color: var(--text-color-primary);
+        }
+        .topic-selector {
+            background-color: var(--card-bg-color);
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow);
+            border-radius: 8px;
+            padding: 0.6rem 2.75rem 0.6rem 0.75rem;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-color-primary);
+            min-width: 150px;
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236B7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 0.75rem center;
+            background-size: 1.25em;
+            transition: box-shadow 0.2s, border-color 0.2s;
+        }
+        .topic-selector:hover {
+            box-shadow: 0 0 0 3px var(--primary-color-transparent);
+            border-color: var(--primary-color);
+        }
+        .topic-selector:focus {
+            outline: none;
+            box-shadow: 0 0 0 3px var(--primary-color-transparent);
+            border-color: var(--primary-color);
+        }
+        .topic-stat {
+            font-size: 0.875rem;
+            font-weight: 500;
+            padding: 0.4rem 0.85rem;
+            border-radius: 999px;
+            color: var(--primary-color);
+            background-color: var(--primary-color-transparent);
+        }
+        #searchInput {
+            padding: 0.6rem 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 0.875rem;
+            width: 100%;
+            max-width: 280px;
+        }
+        #searchInput:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px var(--primary-color-transparent);
+        }
+        
+        /* Table Styles */
+        .table-container { overflow-x: auto; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+        th, td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+            white-space: nowrap;
+        }
+        thead th {
+            background-color: #f8fafc;
+            color: var(--text-color-secondary);
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        th.sortable {
+            cursor: pointer;
+            user-select: none;
+        }
+        th.sortable:hover {
+            background-color: #f1f5f9;
+        }
+        .sort-arrow {
+            display: inline-block;
+            margin-left: 6px;
+            font-size: 0.9em;
+            opacity: 0.7;
+        }
+        tbody tr:hover { background-color: #f8fafc; }
+        td a {
+            color: var(--primary-color);
+            text-decoration: none;
+            font-weight: 500;
+        }
+        td a:hover { text-decoration: underline; }
+        .tag { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-weight: 500; font-size: 0.75rem; text-transform: capitalize; }
+        .tag-easy { background-color: rgba(34, 197, 94, 0.1); color: #16a34a; }
+        .tag-medium { background-color: rgba(249, 115, 22, 0.1); color: #f97316; }
+        .tag-hard { background-color: rgba(239, 68, 68, 0.1); color: #ef4444; }
+
+        /* Progress Bar Styles */
+        .progress-container { display: flex; align-items: center; gap: 0.75rem; }
+        .progress-text { font-size: 0.875rem; color: var(--text-color-secondary); width: 35px; text-align: right; }
+        .progress-bar { width: 100%; min-width: 80px; height: 8px; background-color: var(--border-color); border-radius: 4px; overflow: hidden; }
+        .progress-bar-fill { height: 100%; background-color: var(--primary-color); }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a href="/" class="back-link">&larr; Back to Admin Dashboard</a>
+    <div class="card">
+        <div class="table-header">
+            <div class="topic-details">
+                <div class="topic-selector-wrapper">
+                    <span class="topic-prefix">Topic:</span>
+                    <select id="topicSelector" class="topic-selector">
+                        <option>Loading...</option>
+                    </select>
+                </div>
+                <div id="studentCount" class="topic-stat"></div>
+            </div>
+            <input type="search" id="searchInput" placeholder="Search by name...">
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="sortable" data-sort-key="user_name">Name <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort-key="score">Progress <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort-key="challenge_mode">Hardness <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort-key="domain">Subject <span class="sort-arrow"></span></th>
+                    </tr>
+                </thead>
+                <tbody id="studentsTableBody">
+                    </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+    const supabaseUrl = 'https://qmmcifiwmnqnnjndyxdj.supabase.co';
+    const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtbWNpZml3bW5xbm5qbmR5eGRqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg4NjE2ODYsImV4cCI6MjA2NDQzNzY4Nn0.awYNH_00ZBMZQWPIOasXxiTOZragLYUazwbSnOOC6xA';
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // --- State variables for table sorting ---
+    let allUsersData = [];
+    let sortColumn = 'user_name'; // Default sort column
+    let sortDirection = 'asc';   // Default sort direction
+
+    // --- Helper to get CSS variables for charts ---
+    function getChartColors() {
+        const style = getComputedStyle(document.documentElement);
+        return {
+            primary: style.getPropertyValue('--primary-color').trim(),
+            primaryTransparent: style.getPropertyValue('--primary-color-transparent').trim(),
+            orange: style.getPropertyValue('--orange-color').trim(),
+            orangeTransparent: style.getPropertyValue('--orange-color-transparent').trim(),
+            teal: style.getPropertyValue('--teal-color').trim(),
+            tealTransparent: style.getPropertyValue('--teal-color-transparent').trim(),
+            purple: style.getPropertyValue('--purple-color').trim(),
+            purpleTransparent: style.getPropertyValue('--purple-color-transparent').trim(),
+            pieColors: [
+                style.getPropertyValue('--teal-color').trim(),
+                style.getPropertyValue('--primary-color').trim(),
+                style.getPropertyValue('--orange-color').trim(),
+            ],
+            gridColor: style.getPropertyValue('--border-color').trim(),
+            textColor: style.getPropertyValue('--text-color-secondary').trim(),
+        };
+    }
+
+    // --- KPI Loading ---
+    async function loadKPIs() {
+      const { data: users } = await supabase.from('USER').select('*');
+      const { data: convos } = await supabase.from('conversation').select('*');
+
+      document.getElementById('total-users').textContent = users.length;
+      
+      const today = new Date().toISOString().split('T')[0];
+      
+      const todaysConvos = convos.filter(c => c.created_at.startsWith(today));
+      const todaysActiveUsers = new Set(todaysConvos.map(c => c.user_name));
+      document.getElementById('active-users-today').textContent = todaysActiveUsers.size;
+
+      const sessions = users.map(u => convos.filter(c => c.user_name === u.user_name).length);
+      document.getElementById('avg-session').textContent = (sessions.reduce((a, b) => a + b, 0) / users.length).toFixed(1);
+      const usageByDate = {};
+      convos.forEach(c => {
+        const day = c.created_at.split('T')[0];
+        if (!usageByDate[day]) usageByDate[day] = new Set();
+        usageByDate[day].add(c.user_name);
+      });
+      const avgDaily = Object.values(usageByDate).map(set => set.size);
+      document.getElementById('avg-daily-users').textContent = (avgDaily.reduce((a, b) => a + b, 0) / avgDaily.length).toFixed(1);
+      document.getElementById('avg-questions').textContent = (convos.length / users.length).toFixed(1);
+      document.getElementById('blocked-users').textContent = users.filter(u => u.domain === 'blocked').length;
+    }
+
+    // --- Chart Rendering ---
+    async function renderScoreByMode() {
+      const { data: users } = await supabase.from('USER').select('*');
+      const buckets = {};
+      users.forEach(u => {
+        if (!buckets[u.challenge_mode]) buckets[u.challenge_mode] = [];
+        buckets[u.challenge_mode].push(u.score || 0);
+      });
+      const labels = Object.keys(buckets);
+      const data = labels.map(k => {
+        const scores = buckets[k];
+        return scores.reduce((a, b) => a + b, 0) / scores.length;
+      });
+      if (window.scoreModeChartInstance) window.scoreModeChartInstance.destroy();
+      const colors = getChartColors();
+      const ctx = document.getElementById('scoreByMode');
+      window.scoreModeChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{ data, backgroundColor: colors.tealTransparent, borderColor: colors.teal, borderWidth: 2 }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { title: { display: false }, grid: { display: false }, ticks: { color: colors.textColor } },
+            y: { title: { display: false }, grid: { color: colors.gridColor }, ticks: { color: colors.textColor, precision: 0 } }
+          }
+        }
+      });
+      ctx.onclick = (evt) => {
+        const points = window.scoreModeChartInstance.getElementsAtEventForMode(evt, 'nearest', { intersect: true }, true);
+        if (points.length) {
+          const difficulty = window.scoreModeChartInstance.data.labels[points[0].index];
+          window.location.href = `/difficulty?level=${encodeURIComponent(difficulty)}`;
+        }
+      };
+    }
+
+    async function renderLineChart(days = 30) {
+      const now = new Date();
+      const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+      const startOfWindow = new Date(endOfToday);
+      startOfWindow.setDate(startOfWindow.getDate() - (days - 1));
+      const ymdLocal = (d) => d.toLocaleDateString('en-CA');
+      const { data: convos } = await supabase.from('conversation').select('created_at,user_name').gte('created_at', startOfWindow.toISOString()).lte('created_at', endOfToday.toISOString());
+      const usageByDate = new Map();
+      for (let i = 0; i < days; i++) {
+        const d = new Date(startOfWindow);
+        d.setDate(startOfWindow.getDate() + i);
+        usageByDate.set(ymdLocal(d), new Set());
+      }
+      for (const c of convos || []) {
+        const localDay = ymdLocal(new Date(c.created_at));
+        if (usageByDate.has(localDay)) usageByDate.get(localDay).add(c.user_name);
+      }
+      const labels = Array.from(usageByDate.keys());
+      const data = labels.map((d) => usageByDate.get(d).size);
+      if (window.lineChartInstance) window.lineChartInstance.destroy();
+      const colors = getChartColors();
+      const ctx = document.getElementById('usersTrend');
+      window.lineChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{ data, borderColor: colors.primary, backgroundColor: colors.primaryTransparent, fill: true, tension: 0.4, pointRadius: 4, pointBackgroundColor: colors.primary }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { title: { display: false }, grid: { display: false }, ticks: { color: colors.textColor } },
+            y: { title: { display: false }, beginAtZero: true, grid: { color: colors.gridColor }, ticks: { color: colors.textColor, precision: 0 } }
+          }
+        }
+      });
+      ctx.onclick = (evt) => {
+        const points = window.lineChartInstance.getElementsAtEventForMode(evt, 'nearest', { intersect: true }, true);
+        if (points.length) {
+          const labelDate = window.lineChartInstance.data.labels[points[0].index];
+          window.location.href = `/active?date=${encodeURIComponent(labelDate)}`;
+        }
+      };
+    }
+
+    async function renderBarChart(lang = 'all') {
+      const query = supabase.from('USER').select('*');
+      if (lang !== 'all') query.eq('domain', lang);
+      const { data: users } = await query;
+      const topicScores = {};
+      users.forEach(u => {
+        if (!topicScores[u.current_topic]) topicScores[u.current_topic] = [];
+        topicScores[u.current_topic].push(u.score || 0);
+      });
+      const labels = Object.keys(topicScores);
+      const data = labels.map(k => topicScores[k].reduce((a, b) => a + b, 0) / topicScores[k].length);
+      if (window.barChartInstance) window.barChartInstance.destroy();
+      const colors = getChartColors();
+      const ctx = document.getElementById('scoreTopics');
+      window.barChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{ data, backgroundColor: colors.orangeTransparent, borderColor: colors.orange, borderWidth: 2 }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { title: { display: false }, grid: { display: false }, ticks: { color: colors.textColor } },
+            y: { title: { display: false }, beginAtZero: true, grid: { color: colors.gridColor }, ticks: { color: colors.textColor, precision: 0 } }
+          }
+        }
+      });
+      ctx.onclick = (evt) => {
+        const points = window.barChartInstance.getElementsAtEventForMode(evt, 'nearest', { intersect: true }, true);
+        if (points.length) {
+          const topic = labels[points[0].index];
+          window.location.href = `/topic?name=${encodeURIComponent(topic)}`;
+        }
+      };
+    }
+
+    async function renderPieChart() {
+      const { data: users } = await supabase.from('USER').select('*');
+      const buckets = {};
+      users.forEach(u => {
+        buckets[u.challenge_mode] = (buckets[u.challenge_mode] || 0) + 1;
+      });
+      const labels = Object.keys(buckets);
+      const data = Object.values(buckets);
+      if (window.pieChartInstance) window.pieChartInstance.destroy();
+      const colors = getChartColors();
+      const ctx = document.getElementById('hardnessPie');
+      
+      window.pieChartInstance = new Chart(ctx, {
+        type: 'pie',
+        data: { 
+          labels, 
+          datasets: [{ 
+            data, 
+            backgroundColor: [
+                colors.tealTransparent,
+                colors.primaryTransparent,
+                colors.orangeTransparent,
+            ], 
+            borderColor: [
+                colors.teal,
+                colors.primary,
+                colors.orange,
+            ], 
+            borderWidth: 2 
+          }] 
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'bottom', labels: { color: colors.textColor } } }
+        }
+      });
+      ctx.onclick = (evt) => {
+        const points = window.pieChartInstance.getElementsAtEventForMode(evt, 'nearest', { intersect: true }, true);
+        if (points.length) {
+          const difficulty = window.pieChartInstance.data.labels[points[0].index];
+          window.location.href = `/difficulty?level=${encodeURIComponent(difficulty)}`;
+        }
+      };
+    }
+    
+    async function renderLanguageBar() {
+      const { data: users } = await supabase.from('USER').select('*');
+      const langMap = {};
+      users.forEach(u => { langMap[u.domain] = (langMap[u.domain] || 0) + 1; });
+      const labels = Object.keys(langMap);
+      const data = Object.values(langMap);
+      if (window.langChartInstance) window.langChartInstance.destroy();
+      const colors = getChartColors();
+      const ctx = document.getElementById('langChart');
+      window.langChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{ data, backgroundColor: colors.purpleTransparent, borderColor: colors.purple, borderWidth: 2 }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { title: { display: false }, grid: { display: false }, ticks: { color: colors.textColor } },
+            y: { title: { display: false }, grid: { color: colors.gridColor }, ticks: { color: colors.textColor, precision: 0 } }
+          }
+        }
+      });
+      ctx.onclick = (evt) => {
+        const points = window.langChartInstance.getElementsAtEventForMode(evt, 'nearest', { intersect: true }, true);
+        if (points.length) {
+          const lang = window.langChartInstance.data.labels[points[0].index];
+          window.location.href = `/subject?lang=${encodeURIComponent(lang)}`;
+        }
+      };
+    }
+
+    // --- Table Rendering ---
+    function updateSortArrows() {
+        document.querySelectorAll('.sort-arrow').forEach(arrow => arrow.textContent = '');
+        const activeHeader = document.querySelector(`th[data-sort-key="${sortColumn}"]`);
+        if (activeHeader) {
+            activeHeader.querySelector('.sort-arrow').textContent = sortDirection === 'asc' ? '▼' : '▲';
+        }
+    }
+
+    function populateTable(users) {
+        const tableBody = document.getElementById('studentsTableBody');
+        tableBody.innerHTML = '';
+        users.forEach(u => {
+            const row = document.createElement('tr');
+            const target = `/student/${encodeURIComponent(u.user_name)}`;
+            const score = u.score || 0;
+
+            row.innerHTML = `
+              <td>${u.id}</td>
+              <td><a href="${target}">${u.user_name}</a></td>
+              <td>
+                <div class="progress-container">
+                  <span class="progress-text">${score}%</span>
+                  <div class="progress-bar">
+                    <div class="progress-bar-fill" style="width: ${score}%;"></div>
+                  </div>
+                </div>
+              </td>
+              <td><span class="tag tag-${u.challenge_mode}">${u.challenge_mode}</span></td>
+              <td>${u.current_topic || 'N/A'}</td>
+              <td>${u.domain}</td>
+            `;
+            tableBody.appendChild(row);
+        });
+    }
+
+    function renderTable() {
+        const difficultyOrder = { 'easy': 1, 'medium': 2, 'hard': 3 };
+        const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+
+        // 1. Filter data based on search term
+        let displayData = allUsersData.filter(user =>
+            user.user_name.toLowerCase().includes(searchTerm)
+        );
+
+        // 2. Sort the filtered data
+        displayData.sort((a, b) => {
+            let comparison = 0;
+            if (sortColumn === 'challenge_mode') {
+                const valA = difficultyOrder[a.challenge_mode] || 0;
+                const valB = difficultyOrder[b.challenge_mode] || 0;
+                comparison = valA - valB;
+            } else {
+                const valA = a[sortColumn];
+                const valB = b[sortColumn];
+                if (typeof valA === 'number') {
+                    comparison = (valA || 0) - (valB || 0);
+                } else {
+                    comparison = (valA || '').localeCompare(valB || '');
+                }
+            }
+            return sortDirection === 'asc' ? comparison : -comparison;
+        });
+
+        populateTable(displayData);
+        updateSortArrows();
+    }
+
+    async function fetchAndRenderTable() {
+      const { data: users, error } = await supabase.from('USER').select('*');
+       if (error) {
+        console.error("Error fetching users for table:", error);
+        return;
+      }
+      allUsersData = users;
+      renderTable(); // Perform initial render
+    }
+
+    // --- Initial Load ---
+    document.addEventListener('DOMContentLoaded', () => {
+        loadKPIs();
+        renderLineChart();
+        renderBarChart();
+        renderPieChart();
+        renderLanguageBar();
+        fetchAndRenderTable();
+        renderScoreByMode();
+
+        document.querySelectorAll('input[name="dateRange"]').forEach(radio => {
+            radio.addEventListener('change', e => renderLineChart(parseInt(e.target.value)));
+        });
+        document.querySelectorAll('input[name="langFilter"]').forEach(radio => {
+            radio.addEventListener('change', e => renderBarChart(e.target.value));
+        });
+        
+        // Add event listener for the search bar
+        document.getElementById('searchInput').addEventListener('input', renderTable);
+
+        // Add event listeners for table sorting
+        document.querySelectorAll('th.sortable').forEach(header => {
+            header.addEventListener('click', () => {
+                const newSortColumn = header.dataset.sortKey;
+                if (sortColumn === newSortColumn) {
+                    sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+                } else {
+                    sortColumn = newSortColumn;
+                    sortDirection = 'asc';
+                }
+                renderTable();
+            });
+        });
+    });
+  </script>
+  <style>
+    :root {
+      --primary-color: #2563eb;
+      --primary-color-transparent: rgba(37, 99, 235, 0.1);
+      --orange-color: #f97316;
+      --orange-color-transparent: rgba(249, 115, 22, 0.1);
+      --teal-color: #14b8a6;
+      --teal-color-transparent: rgba(20, 184, 166, 0.1);
+      --purple-color: #8b5cf6;
+      --purple-color-transparent: rgba(139, 92, 246, 0.1);
+      --red-color: #ef4444;
+      --background-color: #f8fafc;
+      --card-bg-color: #ffffff;
+      --text-color-primary: #1e293b;
+      --text-color-secondary: #64748b;
+      --border-color: #e2e8f0;
+      --shadow: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -2px rgba(0,0,0,0.07);
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background-color: var(--background-color);
+      color: var(--text-color-primary);
+      margin: 0;
+    }
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    h1, h2, h3 {
+      margin-top: 0;
+      letter-spacing: -0.5px;
+    }
+    h1 { font-size: 1.875rem; font-weight: 700; margin-bottom: 2rem; }
+    .card {
+      background: var(--card-bg-color);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: var(--shadow);
+    }
+
+    /* KPI Grid */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 2.5rem;
+    }
+    .kpi-card {
+      background: var(--card-bg-color);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: var(--shadow);
+    }
+    .kpi-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+    .kpi-title {
+      color: var(--text-color-secondary);
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+    .kpi-icon { color: var(--text-color-secondary); }
+    .kpi-value {
+      font-size: 2.25rem;
+      font-weight: 700;
+      color: var(--text-color-primary);
+    }
+
+    /* Charts */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(1, 1fr);
+      gap: 1.5rem;
+      margin-bottom: 2.5rem;
+    }
+    @media (min-width: 1024px) {
+      .charts-grid { grid-template-columns: repeat(3, 1fr); }
+      .chart-span-2 { grid-column: span 2 / span 2; }
+      .chart-span-3 { grid-column: span 3 / span 3; }
+    }
+    @media (min-width: 768px) and (max-width: 1023px) {
+      .charts-grid { grid-template-columns: repeat(2, 1fr); }
+      .chart-span-2 { grid-column: span 2 / span 2; }
+      .chart-span-3 { grid-column: span 2 / span 2; }
+    }
+
+    .chart-container {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .chart-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+    .chart-title { font-size: 1.125rem; font-weight: 600; }
+    .filter-group { display: flex; gap: 0.5rem; }
+    .filter-group label {
+      cursor: pointer;
+      padding: 0.25rem 0.75rem;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      font-size: 0.875rem;
+      transition: background-color 0.2s, color 0.2s;
+    }
+    .filter-group input { display: none; }
+    .filter-group input:checked + label {
+      background-color: var(--primary-color);
+      border-color: var(--primary-color);
+      color: white;
+    }
+    .chart-canvas-container {
+        position: relative;
+        height: 280px;
+    }
+    #hardnessPie {
+        max-height: 240px;
+    }
+
+    /* Table */
+    .table-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .table-header h2 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 0;
+    }
+    #searchInput {
+      padding: 0.5rem 0.75rem;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      font-size: 0.875rem;
+      width: 100%;
+      max-width: 280px;
+    }
+    #searchInput:focus {
+      outline: none;
+      border-color: var(--primary-color);
+      box-shadow: 0 0 0 3px var(--primary-color-transparent);
+    }
+    .table-container { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+    th, td {
+      padding: 0.75rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border-color);
+      white-space: nowrap;
+    }
+    thead th {
+      background-color: var(--background-color);
+      color: var(--text-color-secondary);
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    tbody tr:hover { background-color: #f8fafc; }
+    td a {
+        color: var(--primary-color);
+        text-decoration: none;
+        font-weight: 500;
+    }
+    td a:hover { text-decoration: underline; }
+    .tag {
+        display: inline-block;
+        padding: 0.2rem 0.6rem;
+        border-radius: 999px;
+        font-weight: 500;
+        font-size: 0.75rem;
+        text-transform: capitalize;
+    }
+    .tag-easy { background-color: rgba(34, 197, 94, 0.1); color: #16a34a; }
+    .tag-medium { background-color: rgba(249, 115, 22, 0.1); color: #f97316; }
+    .tag-hard { background-color: rgba(239, 68, 68, 0.1); color: #ef4444; }
+
+    th.sortable {
+        cursor: pointer;
+        user-select: none;
+    }
+    th.sortable:hover {
+        background-color: #f1f5f9;
+    }
+    .sort-arrow {
+        display: inline-block;
+        margin-left: 6px;
+        font-size: 0.9em;
+        opacity: 0.7;
+    }
+
+    .progress-container {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+    .progress-text {
+        font-size: 0.875rem;
+        color: var(--text-color-secondary);
+        width: 35px;
+        text-align: right;
+    }
+    .progress-bar {
+        width: 100%;
+        min-width: 80px;
+        height: 8px;
+        background-color: var(--border-color);
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    .progress-bar-fill {
+        height: 100%;
+        background-color: var(--primary-color);
+        border-radius: 4px;
+        transition: width 0.4s ease;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h1>Admin Dashboard</h1>
+
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-header">
+        <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M15 14s1 0 1-1-1-4-6-4-6 3-6 4 1 1 1 1h10Zm-9.995-.944v-.002.002zM3.022 13h9.956a.274.274 0 0 0 .014-.002l.008-.002c-.001-.246-.154-.986-.832-1.664C11.516 10.68 10.289 10 8 10c-2.29 0-3.516.68-4.168 1.332-.678.678-.83 1.418-.832 1.664a1.05 1.05 0 0 0 .022.004zM8 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm3-2a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/></svg>
+        <h3 class="kpi-title">Total Users</h3>
+      </div>
+      <p id="total-users" class="kpi-value">...</p>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-header">
+        <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M11 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/>
+            <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8zm8-7a7 7 0 0 0-5.468 11.37C3.242 11.226 4.805 10 8 10s4.757 1.225 5.468 2.37A7 7 0 0 0 8 1z"/>
+        </svg>
+        <h3 class="kpi-title">Today's Active Users</h3>
+      </div>
+      <p id="active-users-today" class="kpi-value">...</p>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-header">
+            <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 3.5a.5.5 0 0 0-1 0V9a.5.5 0 0 0 .252.434l3.5 2a.5.5 0 0 0 .496-.868L8 8.71V3.5z"/><path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm7-8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z"/></svg>
+            <h3 class="kpi-title">Avg. Questions</h3>
+        </div>
+        <p id="avg-questions" class="kpi-value">...</p>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-header">
+            <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 16s6-5.686 6-10A6 6 0 0 0 2 6c0 4.314 6 10 6 10zm0-7a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>
+            <h3 class="kpi-title">Avg. Sessions</h3>
+        </div>
+        <p id="avg-session" class="kpi-value">...</p>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-header">
+            <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 6.5A.5.5 0 0 1 6 6h4a.5.5 0 0 1 0 1H6a.5.5 0 0 1-.5-.5zm0 2A.5.5 0 0 1 6 8h4a.5.5 0 0 1 0 1H6a.5.5 0 0 1-.5-.5zm0 2A.5.5 0 0 1 6 10h4a.5.5 0 0 1 0 1H6a.5.5 0 0 1-.5-.5z"/><path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5zM2 2a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1H2z"/></svg>
+            <h3 class="kpi-title">Avg. Daily Users</h3>
+        </div>
+        <p id="avg-daily-users" class="kpi-value">...</p>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-header">
+            <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293 5.354 4.646z"/></svg>
+            <h3 class="kpi-title">Blocked Users</h3>
+        </div>
+        <p id="blocked-users" class="kpi-value">...</p>
+    </div>
+  </div>
+
+  <div class="charts-grid">
+    <div class="card chart-container chart-span-2">
+        <div class="chart-header">
+            <h3 class="chart-title">Avg Score by Topic</h3>
+            <div class="filter-group">
+                <input type="radio" name="langFilter" value="all" id="langAll" checked><label for="langAll">All</label>
+                <input type="radio" name="langFilter" value="python" id="langPy"><label for="langPy">Python</label>
+                <input type="radio" name="langFilter" value="javascript" id="langJs"><label for="langJs">JavaScript</label>
+            </div>
+        </div>
+        <div class="chart-canvas-container">
+            <canvas id="scoreTopics"></canvas>
+        </div>
+    </div>
+    
+    <div class="card chart-container">
+        <div class="chart-header">
+            <h3 class="chart-title">Avg Score by Hardness</h3>
+        </div>
+        <div class="chart-canvas-container">
+            <canvas id="scoreByMode"></canvas>
+        </div>
+    </div>
+    
+    <div class="card chart-container chart-span-2">
+        <div class="chart-header">
+            <h3 class="chart-title">Daily Active Users</h3>
+            <div class="filter-group">
+                <input type="radio" name="dateRange" value="7" id="7day"><label for="7day">7 Days</label>
+                <input type="radio" name="dateRange" value="30" id="30day" checked><label for="30day">30 Days</label>
+            </div>
+        </div>
+        <div class="chart-canvas-container">
+            <canvas id="usersTrend"></canvas>
+        </div>
+    </div>
+
+    <div class="card chart-container">
+        <div class="chart-header">
+            <h3 class="chart-title">Students vs Hardness</h3>
+        </div>
+        <div class="chart-canvas-container" style="padding: 0 1rem; display: flex; align-items: center;">
+            <canvas id="hardnessPie"></canvas>
+        </div>
+    </div>
+
+    <div class="card chart-container chart-span-3">
+        <div class="chart-header">
+            <h3 class="chart-title">Students per Language</h3>
+        </div>
+        <div class="chart-canvas-container">
+            <canvas id="langChart"></canvas>
+        </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="table-header">
+      <h2>Student Overview</h2>
+      <input type="search" id="searchInput" placeholder="Search by name...">
+    </div>
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th class="sortable" data-sort-key="id">ID <span class="sort-arrow"></span></th>
+            <th class="sortable" data-sort-key="user_name">Name <span class="sort-arrow"></span></th>
+            <th class="sortable" data-sort-key="score">Progress <span class="sort-arrow"></span></th>
+            <th class="sortable" data-sort-key="challenge_mode">Hardness <span class="sort-arrow"></span></th>
+            <th>Current Topic</th>
+            <th class="sortable" data-sort-key="domain">Language <span class="sort-arrow"></span></th>
+          </tr>
+        </thead>
+        <tbody id="studentsTableBody">
+          </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
