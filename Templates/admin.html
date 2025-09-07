@@ -62,7 +62,6 @@
       });
       const avgDaily = Object.values(usageByDate).map(set => set.size);
       document.getElementById('avg-daily-users').textContent = (avgDaily.reduce((a, b) => a + b, 0) / avgDaily.length).toFixed(1);
-      document.getElementById('avg-questions').textContent = (convos.length / users.length).toFixed(1);
       document.getElementById('blocked-users').textContent = users.filter(u => u.domain === 'blocked').length;
     }
 
@@ -640,10 +639,17 @@
     </div>
     <div class="kpi-card">
         <div class="kpi-header">
-            <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 3.5a.5.5 0 0 0-1 0V9a.5.5 0 0 0 .252.434l3.5 2a.5.5 0 0 0 .496-.868L8 8.71V3.5z"/><path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm7-8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z"/></svg>
-            <h3 class="kpi-title">Avg. Questions</h3>
+            <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 6.5A.5.5 0 0 1 6 6h4a.5.5 0 0 1 0 1H6a.5.5 0 0 1-.5-.5zm0 2A.5.5 0 0 1 6 8h4a.5.5 0 0 1 0 1H6a.5.5 0 0 1-.5-.5zm0 2A.5.5 0 0 1 6 10h4a.5.5 0 0 1 0 1H6a.5.5 0 0 1-.5-.5z"/><path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5zM2 2a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1H2z"/></svg>
+            <h3 class="kpi-title">Avg. Daily Users</h3>
         </div>
-        <p id="avg-questions" class="kpi-value">...</p>
+        <p id="avg-daily-users" class="kpi-value">...</p>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-header">
+          <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293 5.354 4.646z"/></svg>            
+          <h3 class="kpi-title">Completed Users</h3>
+        </div>
+        <p id="completed-users" class="kpi-value">0</p>
     </div>
     <div class="kpi-card">
         <div class="kpi-header">
@@ -652,13 +658,7 @@
         </div>
         <p id="avg-session" class="kpi-value">...</p>
     </div>
-    <div class="kpi-card">
-        <div class="kpi-header">
-            <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 6.5A.5.5 0 0 1 6 6h4a.5.5 0 0 1 0 1H6a.5.5 0 0 1-.5-.5zm0 2A.5.5 0 0 1 6 8h4a.5.5 0 0 1 0 1H6a.5.5 0 0 1-.5-.5zm0 2A.5.5 0 0 1 6 10h4a.5.5 0 0 1 0 1H6a.5.5 0 0 1-.5-.5z"/><path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5zM2 2a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1H2z"/></svg>
-            <h3 class="kpi-title">Avg. Daily Users</h3>
-        </div>
-        <p id="avg-daily-users" class="kpi-value">...</p>
-    </div>
+
     <div class="kpi-card">
         <div class="kpi-header">
             <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293 5.354 4.646z"/></svg>
