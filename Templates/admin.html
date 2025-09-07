@@ -4,7 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Admin Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+  
   <script type="module">
     import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 
@@ -40,30 +43,70 @@
     }
 
     // --- KPI Loading ---
-    async function loadKPIs() {
-      const { data: users } = await supabase.from('USER').select('*');
-      const { data: convos } = await supabase.from('conversation').select('*');
+async function loadKPIs() {
+  const { data: users } = await supabase.from('USER').select('*');
+  const { data: convos } = await supabase.from('conversation').select('*');
 
-      document.getElementById('total-users').textContent = users.length;
-      
-      const today = new Date().toISOString().split('T')[0];
-      
-      const todaysConvos = convos.filter(c => c.created_at.startsWith(today));
-      const todaysActiveUsers = new Set(todaysConvos.map(c => c.user_name));
-      document.getElementById('active-users-today').textContent = todaysActiveUsers.size;
+  // --- Total Users ---
+  document.getElementById('total-users').textContent = users.length;
 
-      const sessions = users.map(u => convos.filter(c => c.user_name === u.user_name).length);
-      document.getElementById('avg-session').textContent = (sessions.reduce((a, b) => a + b, 0) / users.length).toFixed(1);
-      const usageByDate = {};
-      convos.forEach(c => {
-        const day = c.created_at.split('T')[0];
-        if (!usageByDate[day]) usageByDate[day] = new Set();
-        usageByDate[day].add(c.user_name);
-      });
-      const avgDaily = Object.values(usageByDate).map(set => set.size);
-      document.getElementById('avg-daily-users').textContent = (avgDaily.reduce((a, b) => a + b, 0) / avgDaily.length).toFixed(1);
-      document.getElementById('blocked-users').textContent = users.filter(u => u.domain === 'blocked').length;
+  // --- Today's Active Users ---
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todaysConvos = (convos || []).filter(c => c.created_at.startsWith(todayStr));
+  const todaysActiveUsers = new Set(todaysConvos.map(c => c.user_name));
+  document.getElementById('active-users-today').textContent = todaysActiveUsers.size;
+
+  // --- Avg. Daily Users (based on unique users per day) ---
+  const usageByDate = {};
+  (convos || []).forEach(c => {
+    const day = c.created_at.split('T')[0];
+    if (!usageByDate[day]) usageByDate[day] = new Set();
+    usageByDate[day].add(c.user_name);
+  });
+  const avgDaily = Object.values(usageByDate).map(set => set.size);
+  document.getElementById('avg-daily-users').textContent =
+    avgDaily.length ? (avgDaily.reduce((a, b) => a + b, 0) / avgDaily.length).toFixed(1) : '0';
+
+  // --- Completed Users (placeholder logic: users with score >= 100) ---
+  const completed = users.filter(u => (u.score || 0) >= 100).length;
+  document.getElementById('completed-users').textContent = completed;
+
+  // --- Most Active User Today ---
+  if (todaysConvos.length) {
+    const counts = new Map();
+    for (const c of todaysConvos) {
+      if (!c.user_name) continue;
+      counts.set(c.user_name, (counts.get(c.user_name) || 0) + 1);
     }
+    let topUser = null, maxCount = -1;
+    for (const [name, cnt] of counts.entries()) {
+      if (cnt > maxCount) { topUser = name; maxCount = cnt; }
+    }
+    document.getElementById('most-active-user').textContent =
+      `${topUser} (${maxCount})`;
+  } else {
+    document.getElementById('most-active-user').textContent = '—';
+  }
+
+  // --- 7-Day Retention ---
+  const endOfToday = new Date();
+  endOfToday.setHours(23,59,59,999);
+  const start7 = new Date(endOfToday);
+  start7.setDate(start7.getDate() - 6);
+
+  const active7 = new Set(
+    (convos || [])
+      .filter(c => {
+        const t = new Date(c.created_at);
+        return t >= start7 && t <= endOfToday;
+      })
+      .map(c => c.user_name)
+      .filter(Boolean)
+  );
+
+  const retention = users.length ? (active7.size / users.length) * 100 : 0;
+  document.getElementById('retention-rate').textContent = `${retention.toFixed(0)}%`;
+}
 
     // --- Chart Rendering ---
     async function renderScoreByMode() {
@@ -267,6 +310,67 @@
       };
     }
 
+    async function renderScoreDistribution() {
+  // Fetch users & collect scores
+      const { data: users } = await supabase.from('USER').select('score');
+
+      // Make 11 bin edges (0..100 step 10), 10 bins for 0–10, 10–20, ... , 90–100
+      const labels = Array.from({ length: 11 }, (_, i) => i * 10);          // [0,10,...,100]
+      const bins = Array.from({ length: 10 }, () => 0);
+
+      for (const u of users || []) {
+        const s = Math.max(0, Math.min(100, Number(u.score) || 0));
+        const idx = Math.min(9, Math.floor(s / 10)); // 0..9
+        bins[idx] += 1;
+      }
+
+      // Build mid-point labels for nicer x-axis tick text (5, 15, …, 95)
+      const tickLabels = bins.map((_, i) => i * 10 + 5);
+
+      // Colors from your CSS variables helper
+      const colors = getChartColors(); // already defined in your file :contentReference[oaicite:0]{index=0}
+
+      // Destroy old chart if exists
+      if (window.scoreDistChartInstance) window.scoreDistChartInstance.destroy();
+
+      const ctx = document.getElementById('scoreDistribution');
+      window.scoreDistChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: tickLabels, // midpoints
+          datasets: [{
+            label: 'Students',
+            data: bins,
+            borderColor: colors.teal,
+            backgroundColor: colors.orangeTransparent,
+            fill: true,
+            tension: 0.35,
+            pointRadius: 4,
+            pointBackgroundColor: colors.purple
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: {
+              title: { display: true, text: 'Score' },
+              grid: { display: false },
+              ticks: { color: colors.textColor, callback: (v, i) => `${tickLabels[i]}` }
+            },
+            y: {
+              title: { display: true, text: 'Students' },
+              beginAtZero: true,
+              grid: { color: colors.gridColor },
+              ticks: { color: colors.textColor, precision: 0 }
+            }
+          }
+        }
+      });
+    }
+
+
     // --- Table Rendering ---
     function updateSortArrows() {
         document.querySelectorAll('.sort-arrow').forEach(arrow => arrow.textContent = '');
@@ -353,6 +457,7 @@
         renderPieChart();
         renderLanguageBar();
         fetchAndRenderTable();
+        renderScoreDistribution();
         renderScoreByMode();
 
         document.querySelectorAll('input[name="dateRange"]').forEach(radio => {
@@ -430,30 +535,38 @@
       gap: 1.5rem;
       margin-bottom: 2.5rem;
     }
-    .kpi-card {
-      background: var(--card-bg-color);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
-      padding: 1.5rem;
-      box-shadow: var(--shadow);
-    }
-    .kpi-header {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      margin-bottom: 0.75rem;
-    }
-    .kpi-title {
-      color: var(--text-color-secondary);
-      font-size: 0.875rem;
-      font-weight: 500;
-    }
-    .kpi-icon { color: var(--text-color-secondary); }
-    .kpi-value {
-      font-size: 2.25rem;
-      font-weight: 700;
-      color: var(--text-color-primary);
-    }
+/* KPI Cards */
+.kpi-card {
+  background: var(--card-bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 0.75rem 1.5rem;   /* reduced top/bottom padding */
+  box-shadow: var(--shadow);
+}
+
+.kpi-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.1rem;    /* tightened spacing */
+}
+
+.kpi-title {
+  color: var(--text-color-secondary);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.kpi-icon {
+  color: var(--text-color-secondary);
+}
+
+.kpi-value {
+  font-size: 2rem;       /* slightly smaller numbers */
+  font-weight: 700;
+  color: var(--text-color-primary);
+}
+
 
     /* Charts */
     .charts-grid {
@@ -622,50 +735,49 @@
   <div class="kpi-grid">
     <div class="kpi-card">
       <div class="kpi-header">
-        <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M15 14s1 0 1-1-1-4-6-4-6 3-6 4 1 1 1 1h10Zm-9.995-.944v-.002.002zM3.022 13h9.956a.274.274 0 0 0 .014-.002l.008-.002c-.001-.246-.154-.986-.832-1.664C11.516 10.68 10.289 10 8 10c-2.29 0-3.516.68-4.168 1.332-.678.678-.83 1.418-.832 1.664a1.05 1.05 0 0 0 .022.004zM8 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm3-2a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/></svg>
+        <i class="bi bi-people kpi-icon"></i>
         <h3 class="kpi-title">Total Users</h3>
       </div>
       <p id="total-users" class="kpi-value">...</p>
     </div>
     <div class="kpi-card">
       <div class="kpi-header">
-        <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-            <path d="M11 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/>
-            <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8zm8-7a7 7 0 0 0-5.468 11.37C3.242 11.226 4.805 10 8 10s4.757 1.225 5.468 2.37A7 7 0 0 0 8 1z"/>
-        </svg>
+        <i class="bi bi-person-check kpi-icon"></i>
         <h3 class="kpi-title">Today's Active Users</h3>
       </div>
       <p id="active-users-today" class="kpi-value">...</p>
     </div>
     <div class="kpi-card">
         <div class="kpi-header">
-            <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 6.5A.5.5 0 0 1 6 6h4a.5.5 0 0 1 0 1H6a.5.5 0 0 1-.5-.5zm0 2A.5.5 0 0 1 6 8h4a.5.5 0 0 1 0 1H6a.5.5 0 0 1-.5-.5zm0 2A.5.5 0 0 1 6 10h4a.5.5 0 0 1 0 1H6a.5.5 0 0 1-.5-.5z"/><path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5zM2 2a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1H2z"/></svg>
+            <i class="bi bi-bar-chart-line kpi-icon"></i>
             <h3 class="kpi-title">Avg. Daily Users</h3>
         </div>
         <p id="avg-daily-users" class="kpi-value">...</p>
     </div>
     <div class="kpi-card">
         <div class="kpi-header">
-          <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293 5.354 4.646z"/></svg>            
+          <i class="bi bi-check-circle kpi-icon"></i>
           <h3 class="kpi-title">Completed Users</h3>
         </div>
         <p id="completed-users" class="kpi-value">0</p>
     </div>
+
     <div class="kpi-card">
-        <div class="kpi-header">
-            <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M8 16s6-5.686 6-10A6 6 0 0 0 2 6c0 4.314 6 10 6 10zm0-7a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>
-            <h3 class="kpi-title">Avg. Sessions</h3>
-        </div>
-        <p id="avg-session" class="kpi-value">...</p>
+      <div class="kpi-header">
+        <i class="bi bi-lightning-charge kpi-icon"></i>
+        <h3 class="kpi-title">Most Active Today</h3>
+      </div>
+      <p id="most-active-user" class="kpi-value">...</p>
     </div>
 
     <div class="kpi-card">
-        <div class="kpi-header">
-            <svg class="kpi-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293 5.354 4.646z"/></svg>
-            <h3 class="kpi-title">Blocked Users</h3>
-        </div>
-        <p id="blocked-users" class="kpi-value">...</p>
+      <div class="kpi-header">
+        <i class="bi bi-repeat kpi-icon"></i>
+        <h3 class="kpi-title">7-Day Retention</h3>
+      </div>
+      <p id="retention-rate" class="kpi-value">...</p>
     </div>
+
   </div>
 
   <div class="charts-grid">
@@ -692,6 +804,15 @@
         </div>
     </div>
     
+    <div class="card chart-container">
+        <div class="chart-header">
+            <h3 class="chart-title">Students vs Difficulty</h3>
+        </div>
+        <div class="chart-canvas-container" style="padding: 0 1rem; display: flex; align-items: center;">
+            <canvas id="hardnessPie"></canvas>
+        </div>
+    </div>
+
     <div class="card chart-container chart-span-2">
         <div class="chart-header">
             <h3 class="chart-title">Daily Active Users</h3>
@@ -705,16 +826,17 @@
         </div>
     </div>
 
-    <div class="card chart-container">
-        <div class="chart-header">
-            <h3 class="chart-title">Students vs Difficulty</h3>
-        </div>
-        <div class="chart-canvas-container" style="padding: 0 1rem; display: flex; align-items: center;">
-            <canvas id="hardnessPie"></canvas>
-        </div>
+    <div class="card chart-container chart-span-2">
+      <div class="chart-header">
+        <h3 class="chart-title">Score Distribution</h3>
+      </div>
+      <div class="chart-canvas-container">
+        <canvas id="scoreDistribution"></canvas>
+      </div>
     </div>
 
-    <div class="card chart-container chart-span-3">
+
+    <div class="card chart-container">
         <div class="chart-header">
             <h3 class="chart-title">Students per Language</h3>
         </div>
