@@ -54,7 +54,7 @@
                 user.user_name.toLowerCase().includes(searchTerm)
             );
             
-            document.getElementById('studentCount').textContent = `${displayData.length} Students`;
+            document.getElementById('studentCount').textContent = `${displayData.length} Student${displayData.length === 1 ? '' : 's'}`;
 
             displayData.sort((a, b) => {
                 const valA = a[sortColumn];

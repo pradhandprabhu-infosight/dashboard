@@ -16,6 +16,10 @@
     const $ = (sel) => document.querySelector(sel);
     const ymdLocal = (d) => d.toLocaleDateString('en-CA'); // YYYY-MM-DD
 
+    let allUsersData = [];
+    let sortColumn = 'user_name';
+    let sortDirection = 'asc';
+
     function getDateFromQuery() {
       const p = new URLSearchParams(location.search);
       const q = p.get('date');
@@ -32,6 +36,57 @@
       return { startISO: start.toISOString(), endISO: end.toISOString() };
     }
 
+    function updateSortArrows() {
+      document.querySelectorAll('.sort-arrow').forEach(arrow => arrow.textContent = '');
+      const activeHeader = document.querySelector(`th[data-sort-key="${sortColumn}"]`);
+      if (activeHeader) {
+        activeHeader.querySelector('.sort-arrow').textContent = sortDirection === 'asc' ? '▼' : '▲';
+      }
+    }
+
+    function populateTable(users) {
+      const tableBody = $('#usersTbody');
+      tableBody.innerHTML = '';
+      users.forEach(u => {
+        const row = document.createElement('tr');
+        const target = `/student/${encodeURIComponent(u.user_name)}`;
+        row.innerHTML = `
+          <td><a href="${target}">${u.user_name}</a></td>
+          <td>${u.conversations}</td>
+          <td>${u.current_topic || 'N/A'}</td>
+          <td>${u.domain || 'N/A'}</td>
+        `;
+        tableBody.appendChild(row);
+      });
+    }
+
+    function renderTable() {
+      const searchTerm = $('#searchInput').value.toLowerCase();
+
+      let displayData = allUsersData.filter(user =>
+        user.user_name.toLowerCase().includes(searchTerm)
+      );
+      
+    $('#activeCount').textContent = `${displayData.length} Student${displayData.length === 1 ? '' : 's'}`;
+
+
+
+      displayData.sort((a, b) => {
+        const valA = a[sortColumn];
+        const valB = b[sortColumn];
+        let comparison = 0;
+        if (typeof valA === 'number') {
+          comparison = (valA || 0) - (valB || 0);
+        } else {
+          comparison = (valA || '').localeCompare(valB || '');
+        }
+        return sortDirection === 'asc' ? comparison : -comparison;
+      });
+
+      populateTable(displayData);
+      updateSortArrows();
+    }
+
     async function loadActiveList(dateStr) {
       $('#status').textContent = 'Loading...';
       $('#activeCount').textContent = '—';
@@ -39,7 +94,7 @@
 
       const { startISO, endISO } = mkDayBoundsISO(dateStr);
 
-      // Pull only needed fields within the date window
+      // Pull conversations within the date window
       const { data: convos, error } = await supabase
         .from('conversation')
         .select('created_at,user_name')
@@ -52,29 +107,46 @@
         return;
       }
 
-      // Unique users + counts for the selected date
+      // Count conversations per user
       const counts = new Map();
       for (const c of convos || []) {
         if (!c?.user_name) continue;
         counts.set(c.user_name, (counts.get(c.user_name) || 0) + 1);
       }
 
-      // Update header
-      $('#activeCount').textContent = counts.size.toString();
-      $('#status').textContent = counts.size ? '' : 'No active users were found for this date.';
-
-      // Render rows
-      const rows = [];
-      for (const [user, hits] of counts.entries()) {
-        const target = `/student/${encodeURIComponent(user)}`;
-        rows.push(`
-          <tr>
-            <td><a href="${target}">${user}</a></td>
-            <td>${hits}</td>
-          </tr>
-        `);
+      if (counts.size === 0) {
+        $('#status').textContent = 'No active users were found for this date.';
+        allUsersData = [];
+        renderTable();
+        return;
       }
-      $('#usersTbody').innerHTML = rows.join('');
+
+      // Get user details for those who had conversations
+      const activeUsernames = Array.from(counts.keys());
+      const { data: users, error: userError } = await supabase
+        .from('USER')
+        .select('user_name, current_topic, domain')
+        .in('user_name', activeUsernames);
+
+      if (userError) {
+        console.error('Error fetching user details:', userError);
+        $('#status').textContent = 'Failed to load user details.';
+        return;
+      }
+
+      // Combine conversation counts with user details
+      allUsersData = activeUsernames.map(username => {
+        const userDetails = users.find(u => u.user_name === username) || {};
+        return {
+          user_name: username,
+          conversations: counts.get(username),
+          current_topic: userDetails.current_topic,
+          domain: userDetails.domain
+        };
+      });
+
+      $('#status').textContent = '';
+      renderTable();
     }
 
     // --- Init ---
@@ -82,7 +154,6 @@
     window.addEventListener('DOMContentLoaded', () => {
       const input = $('#datePicker');
       input.value = selected;
-      $('#chosenDate').textContent = selected;
       loadActiveList(selected);
 
       input.addEventListener('change', (e) => {
@@ -91,20 +162,38 @@
         const params = new URLSearchParams(location.search);
         params.set('date', d);
         history.replaceState(null, '', `${location.pathname}?${params.toString()}`);
-        $('#chosenDate').textContent = d;
         loadActiveList(d);
+      });
+
+      // Search functionality
+      $('#searchInput').addEventListener('input', renderTable);
+
+      // Sorting functionality
+      document.querySelectorAll('th.sortable').forEach(header => {
+        header.addEventListener('click', () => {
+          const newSortColumn = header.dataset.sortKey;
+          if (sortColumn === newSortColumn) {
+            sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+          } else {
+            sortColumn = newSortColumn;
+            sortDirection = 'asc';
+          }
+          renderTable();
+        });
       });
     });
   </script>
   <style>
     :root {
       --primary-color: #2563eb;
+      --primary-color-transparent: rgba(37, 99, 235, 0.1);
       --background-color: #f8fafc;
       --card-bg-color: #ffffff;
       --text-color-primary: #1e293b;
       --text-color-secondary: #64748b;
       --border-color: #e2e8f0;
-      --shadow: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -2px rgba(0,0,0,0.07);
+      --shadow: 0 1px 2px 0 rgba(0,0,0,0.05);
+      --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1);
     }
     * { box-sizing: border-box; }
     body {
@@ -112,74 +201,123 @@
       background-color: var(--background-color);
       color: var(--text-color-primary);
       margin: 0;
+      padding: 2rem;
     }
     .container {
-      max-width: 900px;
+      max-width: 1200px;
       margin: 0 auto;
-      padding: 2rem;
+    }
+    .back-link {
+      display: inline-block;
+      background-color: var(--primary-color-transparent);
+      color: var(--primary-color);
+      border: 1px solid transparent;
+      padding: 0.6rem 1rem;
+      border-radius: 8px;
+      font-weight: 600;
+      text-decoration: none;
+      font-size: 0.9rem;
+      margin-bottom: 1.5rem;
+      transition: background-color 0.2s;
+    }
+    .back-link:hover {
+      background-color: rgba(37, 99, 235, 0.2);
     }
     .card {
       background: var(--card-bg-color);
       border: 1px solid var(--border-color);
       border-radius: 12px;
-      padding: 1.5rem 2rem;
-      box-shadow: var(--shadow);
+      padding: 1.5rem;
+      box-shadow: var(--shadow-md);
     }
-    h1 { 
-      font-size: 1.5rem; 
-      font-weight: 600;
-      margin: 0 0 1.5rem;
-      letter-spacing: -0.5px;
+    .table-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      margin-bottom: 1.5rem;
     }
-    .toolbar { 
-      display: flex; 
-      gap: 1.5rem; 
-      align-items: center; 
-      margin-bottom: 1rem; 
-      flex-wrap: wrap; 
-      border-bottom: 1px solid var(--border-color);
-      padding-bottom: 1.5rem;
+    .date-details {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
     }
+
     #datePicker {
       border: 1px solid var(--border-color);
-      border-radius: 6px;
-      padding: 0.5rem 0.75rem;
+      border-radius: 8px;
+      padding: 0.6rem 0.75rem;
       font-family: inherit;
       font-size: 0.875rem;
       color: var(--text-color-primary);
+      background-color: var(--card-bg-color);
     }
-    .kpi-display {
-      margin-left: auto;
-      background-color: var(--primary-color);
-      color: white;
-      padding: 0.5rem 1rem;
-      border-radius: 8px;
+    #datePicker:focus {
+      outline: none;
+      border-color: var(--primary-color);
+      box-shadow: 0 0 0 3px var(--primary-color-transparent);
+    }
+    .topic-stat {
+      font-size: 0.875rem;
       font-weight: 500;
+      padding: 0.4rem 0.85rem;
+      border-radius: 999px;
+      color: var(--primary-color);
+      background-color: var(--primary-color-transparent);
     }
-    .kpi-display strong {
-      font-size: 1.125rem;
+    #searchInput {
+      padding: 0.6rem 0.75rem;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      font-size: 0.875rem;
+      width: 100%;
+      max-width: 280px;
     }
-    table { 
-      width: 100%; 
-      border-collapse: collapse; 
-      margin-top: 1rem; 
+    #searchInput:focus {
+      outline: none;
+      border-color: var(--primary-color);
+      box-shadow: 0 0 0 3px var(--primary-color-transparent);
     }
-    th, td { 
-      padding: 0.75rem 1rem; 
-      border-bottom: 1px solid var(--border-color);
+    
+    /* Table Styles */
+    .table-container { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+    th, td {
+      padding: 0.75rem 1rem;
       text-align: left;
+      border-bottom: 1px solid var(--border-color);
+      white-space: nowrap;
     }
-    th { 
-      background: var(--background-color);
+    thead th {
+      background-color: #f8fafc;
       color: var(--text-color-secondary);
       font-weight: 600;
       text-transform: uppercase;
-      font-size: 0.75rem;
     }
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+    }
+    th.sortable:hover {
+      background-color: #f1f5f9;
+    }
+    .sort-arrow {
+      display: inline-block;
+      margin-left: 6px;
+      font-size: 0.9em;
+      opacity: 0.7;
+    }
+    tbody tr:hover { background-color: #f8fafc; }
     td a {
-        color: var(--primary-color);
-        text-decoration: none;
-        font-weight: 500;
+      color: var(--primary-color);
+      text-decoration: none;
+      font-weight: 500;
     }
     td a:hover { text-decoration: underline; }
     #status { 
@@ -187,47 +325,37 @@
       color: var(--text-color-secondary); 
       font-style: italic;
     }
-    .backlink { 
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      color: var(--primary-color);
-      text-decoration: none;
-      font-weight: 500;
-      transition: opacity 0.2s;
-      margin-bottom: 1rem;
-    }
-    .backlink:hover { opacity: 0.8; }
   </style>
 </head>
 <body>
 <div class="container">
-  <a class="backlink" href="/">
-    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-      <path fill-rule="evenodd" d="M15 8a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 8.5H14.5A.5.5 0 0 0 15 8z"/>
-    </svg>
-    <span>Back to Admin</span>
+  <a class="back-link" href="/">
+    ← Back to Admin Dashboard
   </a>
 
   <div class="card">
-    <h1>Active Users for <strong id="chosenDate">—</strong></h1>
-    <div class="toolbar">
-      <label for="datePicker"><strong>Select a date:</strong></label>
-      <input id="datePicker" type="date"/>
-      <div class="kpi-display">Active Students: <strong id="activeCount">—</strong></div>
+    <div class="table-header">
+      <div class="date-details">
+        <label for="datePicker" style="color: var(--text-color-secondary); font-weight: 500;">Select date:</label>
+        <input id="datePicker" type="date"/>
+        <div id="activeCount" class="topic-stat"></div>
+      </div>
+      <input type="search" id="searchInput" placeholder="Search by name...">
     </div>
     
     <div class="table-container">
-        <p id="status"></p>
-        <table>
-          <thead>
-            <tr>
-              <th>Student</th>
-              <th style="width:200px;">Conversations that day</th>
-            </tr>
-          </thead>
-          <tbody id="usersTbody"></tbody>
-        </table>
+      <p id="status"></p>
+      <table>
+        <thead>
+          <tr>
+            <th class="sortable" data-sort-key="user_name">Name <span class="sort-arrow"></span></th>
+            <th class="sortable" data-sort-key="conversations">Conversations <span class="sort-arrow"></span></th>
+            <th class="sortable" data-sort-key="current_topic">Topic <span class="sort-arrow"></span></th>
+            <th class="sortable" data-sort-key="domain">Subject <span class="sort-arrow"></span></th>
+          </tr>
+        </thead>
+        <tbody id="usersTbody"></tbody>
+      </table>
     </div>
   </div>
 </div>

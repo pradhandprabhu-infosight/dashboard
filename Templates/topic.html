@@ -54,8 +54,8 @@
             let displayData = allUsersData.filter(user =>
                 user.user_name.toLowerCase().includes(searchTerm)
             );
-            
-            document.getElementById('studentCount').textContent = `${displayData.length} Students`;
+
+            document.getElementById('studentCount').textContent = `${displayData.length} Student${displayData.length === 1 ? '' : 's'}`;
 
             displayData.sort((a, b) => {
                 let comparison = 0;
@@ -345,7 +345,7 @@
                     <tr>
                         <th class="sortable" data-sort-key="user_name">Name <span class="sort-arrow"></span></th>
                         <th class="sortable" data-sort-key="score">Progress <span class="sort-arrow"></span></th>
-                        <th class="sortable" data-sort-key="challenge_mode">Hardness <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort-key="challenge_mode">Difficulty <span class="sort-arrow"></span></th>
                         <th class="sortable" data-sort-key="domain">Subject <span class="sort-arrow"></span></th>
                     </tr>
                 </thead>
